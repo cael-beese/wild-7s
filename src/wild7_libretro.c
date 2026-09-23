@@ -4435,6 +4435,8 @@ static uint32_t special_col(int sy){
   case SY_STAR:    return 0x7CFF6A;
   case SY_CROWN:   return 0xC060FF;
   case SY_JACKPOT: return 0xFF6A30;
+  case SY_COIN:    return 0xFFD24A;    /* gold: hold & spin */
+  case SY_WHEEL:   return 0xA86CFF;    /* violet: wheel of 7s */
   default:         return 0x9AF0FF;
   }
 }
