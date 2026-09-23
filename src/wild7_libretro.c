@@ -2758,7 +2758,10 @@ static void seg_bar(float x,float y,float len,float th,int horiz,
       float inset = fabsf(dy);
       float x0=x+inset, x1=x+len-inset;
       float sh = (ybase-(y+j))*slant;
-      for(int i=(int)x0;i<(int)x1;i++) fb_blend(i+(int)sh,(int)y+j,c,a);
+      int xa=(int)x0+(int)sh, xb=(int)x1+(int)sh;      /* one run per row */
+      if(xa<0) xa=0;
+      if(xb>FBW) xb=FBW;
+      if(xa<xb) span_put(fb+(size_t)(iy+j)*FBW+xa,xb-xa,c,a);
     }
   } else {
     for(int j=j0;j<j1;j++){
@@ -3931,18 +3934,26 @@ static void draw_marquee(void){
  *  contract in DEVELOPING.md): nothing reachable from here may change
  *  state, and the frame is only whole again after the bands join.     */
 static void draw_frame(void){
-  draw_marquee();
-  if(G.state==ST_HOLD) hold_draw();       /* the bonus owns the reel window */
-  else {
-    draw_reels();
-    hold_draw_cells();                    /* coin values over landed coins  */
-    extra_draw_reels();                   /* 7 STRIKE over the reels        */
+  /* The pay table and the pick board repaint every row from a cached
+     frame (draw_overlays -> draw_paytable / draw_bonus), so the cabinet
+     under them would be drawn only to be overwritten: skip it.  If one
+     of those screens ever lets the cabinet show through, drop its state
+     from this test. */
+  int opaque = (G.state==ST_PAYTABLE || G.state==ST_BONUS);
+  if(!opaque){
+    draw_marquee();
+    if(G.state==ST_HOLD) hold_draw();     /* the bonus owns the reel window */
+    else {
+      draw_reels();
+      hold_draw_cells();                  /* coin values over landed coins  */
+      extra_draw_reels();                 /* 7 STRIKE over the reels        */
+    }
+    draw_features();
+    draw_wins();
+    draw_parts();
+    fx_draw();                            /* world-layer effects            */
+    draw_meters();
   }
-  draw_features();
-  draw_wins();
-  draw_parts();
-  fx_draw();                              /* world-layer effects            */
-  draw_meters();
   draw_overlays();
   if(G.state==ST_WHEEL)  wheel_draw();    /* full-screen feature scenes     */
   if(G.state==ST_GAMBLE) gamble_draw();

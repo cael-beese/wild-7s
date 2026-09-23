@@ -190,7 +190,7 @@ static int bp_config(int want,int bands){
   }
   bp_nthreads=bp_nworkers+1;
   bp_want_bands=bands;
-  bp_layout(bp_nthreads==1 ? 1 : (bands>0 ? bands : bp_nthreads*4));
+  bp_layout(bp_nthreads==1 ? 1 : (bands>0 ? bands : bp_nthreads*3));
   return bp_nthreads;
 }
 #endif

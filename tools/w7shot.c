@@ -29,7 +29,9 @@
  *  roughly 4-6x slower per core - measure there before trusting a budget).
  * ===================================================================== */
 #include "../src/wild7_libretro.c"
+#ifndef W7SHOT_NOPNG
 #include <zlib.h>
+#endif
 #include <time.h>
 
 static const uint32_t *last_fb;
@@ -65,7 +67,18 @@ static bool env(unsigned cmd,void*data){
   }
 }
 
-/* ---- tiny PNG writer (zlib) ---- */
+/* ---- tiny PNG writer (zlib).  -DW7SHOT_NOPNG builds without zlib
+   (e.g. on a Pi without zlib1g-dev) and writes binary PPM instead. ---- */
+#ifdef W7SHOT_NOPNG
+#define SHOT_EXT "ppm"
+static int write_png(const char*path,const uint32_t*px,int w,int h){
+  FILE*f=fopen(path,"wb"); if(!f) return -1;
+  fprintf(f,"P6\n%d %d\n255\n",w,h);
+  for(size_t i=0;i<(size_t)w*h;i++){ unsigned char c[3]={(unsigned char)(px[i]>>16),(unsigned char)(px[i]>>8),(unsigned char)px[i]}; fwrite(c,1,3,f); }
+  fclose(f); return 0;
+}
+#else
+#define SHOT_EXT "png"
 static void be32(unsigned char*p,uint32_t v){ p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=v; }
 static void chunk(FILE*f,const char*t,const unsigned char*d,uint32_t n){
   unsigned char h[8]; be32(h,n); memcpy(h+4,t,4); fwrite(h,1,8,f);
@@ -88,6 +101,7 @@ static int write_png(const char*path,const uint32_t*px,int w,int h){
   chunk(f,"IHDR",ih,13); chunk(f,"IDAT",z,(uint32_t)zl); chunk(f,"IEND",NULL,0);
   fclose(f); free(r); free(z); return 0;
 }
+#endif
 
 static int parse_btn(const char*s){
   static const struct { const char*n; int b; } T[]={
@@ -110,6 +124,7 @@ static uint64_t frame_hash(const uint32_t*px,size_t n){
   return h;
 }
 
+static int cmp_d(const void*a,const void*b){ double x=*(const double*)a, y=*(const double*)b; return x<y?-1:(x>y); }
 static double now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return ts.tv_sec*1e3+ts.tv_nsec/1e6; }
 
 int main(int argc,char**argv){
@@ -145,13 +160,14 @@ int main(int argc,char**argv){
   double tinit=now_ms()-t0;
 
   double sum=0,mx=0; long mxf=0;
+  double*ft=(double*)malloc(sizeof(double)*(size_t)(N>0?N:1));  /* for the median */
   uint64_t digest=1469598103934665603ULL; long nhash=0;
   for(long f=0;f<N;f++){
     cur_btn=0;
     for(int k=0;k<nsc;k++) if(sf[k]==f) cur_btn|=sb[k];
     double a=now_ms();
     retro_run();
-    double d=now_ms()-a; sum+=d; if(d>mx){ mx=d; mxf=f; }
+    double d=now_ms()-a; sum+=d; if(ft) ft[f]=d; if(d>mx){ mx=d; mxf=f; }
     if(hashEvery>0 && (f%hashEvery)==0 && last_fb){
       uint64_t h=frame_hash(last_fb,(size_t)FBW*FBH);
       digest^=h; digest*=1099511628211ULL; nhash++;
@@ -160,12 +176,21 @@ int main(int argc,char**argv){
     int save=every? (f%every==0) : 0;
     for(int k=0;k<ns && !save;k++) if(savef[k]==f) save=1;
     if(save && last_fb){
-      char path[1024]; snprintf(path,sizeof path,"%s/%s%05ld.png",outdir,pfx,f);
+      char path[1024]; snprintf(path,sizeof path,"%s/%s%05ld." SHOT_EXT,outdir,pfx,f);
       if(write_png(path,last_fb,FBW,FBH)==0) printf("wrote %s  (state %d)\n",path,G.state);
     }
   }
   if(hashEvery>0) printf("digest %016llx over %ld frames\n",(unsigned long long)digest,nhash);
-  printf("init %.1f ms   frames %ld   mean %.2f ms   max %.2f ms (frame %ld)\n",tinit,N,sum/N,mx,mxf);
+  /* the median and 95th percentile shrug off the odd preempted frame,
+     which on a shared box the mean and max do not */
+  double p50=0,p95=0;
+  if(ft && N>0){
+    qsort(ft,(size_t)N,sizeof(double),cmp_d);
+    p50=ft[N/2]; p95=ft[(N*95)/100<N?(N*95)/100:N-1];
+  }
+  printf("init %.1f ms   frames %ld   mean %.2f ms   max %.2f ms (frame %ld)   p50 %.2f  p95 %.2f\n",
+         tinit,N,sum/N,mx,mxf,p50,p95);
+  free(ft);
   retro_deinit();
   return 0;
 }

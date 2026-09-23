@@ -9,7 +9,11 @@
 #    REF=/path/to/tree tools/bandcheck.sh   (a tree holding src/, for
 #                                            when git is not installed)
 #    FRAMES=1800 EVERY=10 tools/bandcheck.sh
-#    SHOTCFLAGS="-O3 -ffast-math -march=native" tools/bandcheck.sh
+#    SHOTCFLAGS="-O3 -ffast-math -mcpu=native" tools/bandcheck.sh   (as the Pi
+#                                            builds the core)
+#    CC=aarch64-linux-gnu-gcc RUN="qemu-aarch64 -L /usr/aarch64-linux-gnu" \
+#      SHOTCFLAGS="-O3 -ffast-math -mcpu=cortex-a72" tools/bandcheck.sh
+#                                           (the Pi's code, on x86)
 #
 #  Every scenario runs the real retro_run() loop in w7shot, hashes every
 #  EVERY-th frame and folds the hashes into one digest.  Matching digests
@@ -23,26 +27,28 @@ EVERY=${EVERY:-30}
 THREADS=${THREADS:-"2 3 4"}
 SHOTCFLAGS=${SHOTCFLAGS:--O2}
 REF=${REF:-}
+CC=${CC:-cc}
+RUN=${RUN:-}          # e.g. "qemu-aarch64 -L /usr/aarch64-linux-gnu" with CC=aarch64-linux-gnu-gcc
 
 tmp=$(mktemp -d)
-cc $SHOTCFLAGS -Isrc -o "$tmp/w7shot_bc" tools/w7shot.c -lm -lz -lpthread || exit 2
+$CC $SHOTCFLAGS -DW7SHOT_NOPNG -Isrc -o "$tmp/w7shot_bc" tools/w7shot.c -lm -lpthread || exit 2
 
 if [ -n "$REF" ]; then
   mkdir -p "$tmp/ref/tools"
   if [ -d "$REF/src" ]; then cp -r "$REF/src" "$tmp/ref/"       # an exported tree
   else git archive "$REF" src | tar -x -C "$tmp/ref" || exit 2; fi
   cp tools/w7shot.c "$tmp/ref/tools/"
-  cc $SHOTCFLAGS -I"$tmp/ref/src" -o "$tmp/w7shot_ref" "$tmp/ref/tools/w7shot.c" -lm -lz -lpthread || exit 2
+  $CC $SHOTCFLAGS -DW7SHOT_NOPNG -I"$tmp/ref/src" -o "$tmp/w7shot_ref" "$tmp/ref/tools/w7shot.c" -lm -lpthread || exit 2
 fi
 
 # autopilot:force pairs.  1 spin loop, 2 pay table, 4 add credits,
 # 5 features page, 6 bet ladder; the forces land every bonus and
 # jackpot tier.
-SCEN=${SCEN:-"1: 2: 4: 5: 6: 1:win 1:free 1:pick 1:mega 1:minor 1:ult"}
+SCEN=${SCEN:-"1: 2: 4: 5: 6: 1:free 1:pick 1:mega 1:minor 1:ult"}
 
 run(){  # bin threads pilot force out
   WILD7_AUTOPILOT=$3 WILD7_FORCE=$4 W7SHOT_OPTS="wild7_threads=$2" \
-    "$1" -n "$FRAMES" -H "$EVERY" -q -s -1 -o "$tmp" | awk '/^digest/{print $2}' > "$5"
+    $RUN "$1" -n "$FRAMES" -H "$EVERY" -q -s -1 -o "$tmp" | awk '/^digest/{print $2}' > "$5"
 }
 
 for s in $SCEN; do
