@@ -17,6 +17,12 @@
  *              WILD7_AUTOPILOT is set (the core's own pilot wins).
  *  -p NAME     file name prefix (default f)
  *  -r SEED     rng seed
+ *  -H N        hash every Nth frame (1 = all): prints "h FRAME STATE HASH"
+ *              per hashed frame and a final "digest" line.  Two runs drew
+ *              identical frames iff their outputs match, which is how the
+ *              band renderer is proved against the single-threaded one:
+ *              W7SHOT_OPTS=wild7_threads=1 against =3.  See tools/bandcheck.sh
+ *  -q          with -H, print only the digest line
  *
  *  The WILD7_AUTOPILOT / WILD7_FORCE environment hooks work as on the Pi.
  *  Prints mean / max ms per frame at the end (x86 numbers: the Pi 4 is
@@ -93,10 +99,21 @@ static int parse_btn(const char*s){
   return b;
 }
 
+/* 64-bit FNV-1a style mix over the frame, eight bytes at a step: fast
+   enough to hash every frame of a long run. */
+static uint64_t frame_hash(const uint32_t*px,size_t n){
+  uint64_t h=1469598103934665603ULL;
+  for(size_t i=0;i+1<n;i+=2){
+    uint64_t w=(uint64_t)px[i] | ((uint64_t)px[i+1]<<32);
+    h^=w; h*=1099511628211ULL; h^=h>>29;
+  }
+  return h;
+}
+
 static double now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return ts.tv_sec*1e3+ts.tv_nsec/1e6; }
 
 int main(int argc,char**argv){
-  long N=300; const char*outdir="."; const char*saves="299"; const char*script=NULL; const char*pfx="f";
+  long N=300, hashEvery=0; int quiet=0; const char*outdir="."; const char*saves="299"; const char*script=NULL; const char*pfx="f";
   for(int i=1;i<argc;i++){
     if(!strcmp(argv[i],"-n")&&i+1<argc) N=atol(argv[++i]);
     else if(!strcmp(argv[i],"-s")&&i+1<argc) saves=argv[++i];
@@ -104,6 +121,8 @@ int main(int argc,char**argv){
     else if(!strcmp(argv[i],"-i")&&i+1<argc) script=argv[++i];
     else if(!strcmp(argv[i],"-p")&&i+1<argc) pfx=argv[++i];
     else if(!strcmp(argv[i],"-r")&&i+1<argc) rngs=(uint32_t)strtoul(argv[++i],NULL,0);
+    else if(!strcmp(argv[i],"-H")&&i+1<argc) hashEvery=atol(argv[++i]);
+    else if(!strcmp(argv[i],"-q")) quiet=1;
   }
   int every=0; if(!strncmp(saves,"every:",6)) every=atoi(saves+6);
   static long savef[256]; int ns=0;
@@ -126,12 +145,18 @@ int main(int argc,char**argv){
   double tinit=now_ms()-t0;
 
   double sum=0,mx=0; long mxf=0;
+  uint64_t digest=1469598103934665603ULL; long nhash=0;
   for(long f=0;f<N;f++){
     cur_btn=0;
     for(int k=0;k<nsc;k++) if(sf[k]==f) cur_btn|=sb[k];
     double a=now_ms();
     retro_run();
     double d=now_ms()-a; sum+=d; if(d>mx){ mx=d; mxf=f; }
+    if(hashEvery>0 && (f%hashEvery)==0 && last_fb){
+      uint64_t h=frame_hash(last_fb,(size_t)FBW*FBH);
+      digest^=h; digest*=1099511628211ULL; nhash++;
+      if(!quiet) printf("h %ld %d %016llx\n",f,G.state,(unsigned long long)h);
+    }
     int save=every? (f%every==0) : 0;
     for(int k=0;k<ns && !save;k++) if(savef[k]==f) save=1;
     if(save && last_fb){
@@ -139,6 +164,7 @@ int main(int argc,char**argv){
       if(write_png(path,last_fb,FBW,FBH)==0) printf("wrote %s  (state %d)\n",path,G.state);
     }
   }
+  if(hashEvery>0) printf("digest %016llx over %ld frames\n",(unsigned long long)digest,nhash);
   printf("init %.1f ms   frames %ld   mean %.2f ms   max %.2f ms (frame %ld)\n",tinit,N,sum/N,mx,mxf);
   retro_deinit();
   return 0;
