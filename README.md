@@ -1,18 +1,23 @@
 # WILD 7's — RetroPie build
 
 An original five-reel, five-row **adjacent ways** video slot, written as a
-libretro core. Builds on the Pi in a few seconds, appears in EmulationStation
-under **Ports**, runs through RetroArch with your controller config, save
-states and CRT shader.
+libretro core. Appears in EmulationStation under **Ports**, runs through
+RetroArch with your controller config, save states and CRT shader.
 
 ```
-make
+make                       # about 3.5 minutes on the Pi 4 (one big -O3 unit)
 sudo ./install-retropie.sh
 ```
 
 Renders **1280x720, 16:9**. The core declares its own aspect and the installer
 sets `aspect_ratio_index = 22` (core provided), so RetroArch takes the shape
 from the core rather than forcing 4:3.
+
+**Version 3** is the "Hollywood" build: four new features (HOLD & SPIN,
+WHEEL OF 7'S, the 7 STRIKE wild storm and a GAMBLE), BIG / SUPER / MEGA /
+EPIC win celebrations with 3-D coin showers, new art throughout, stereo
+sound with music, and a renderer that draws each frame on three of the
+Pi 4's four cores. `DEVELOPING.md` is the guide to working on it.
 
 ## How it pays
 
@@ -49,19 +54,20 @@ Pays are multiples of the total bet, per way.
 
 | | 3 reels | 4 reels | 5 reels |
 |---|---|---|---|
-| WILD 7  | 0.4 | 1.8 | 17.5 |
-| DIAMOND | 0.3 | 1.0 | 5.6  |
-| BELL    | 0.2 | 0.7 | 3.3  |
-| BAR     | 0.2 | 0.6 | 2.0  |
-| GRAPES  | 0.1 | 0.4 | 1.3  |
-| ORANGE  | 0.1 | 0.3 | 1.1  |
-| PLUM    | 0.1 | 0.2 | 0.6  |
-| CHERRY  | 0.1 | 0.2 | 0.5  |
-| LEMON   | 0.1 | 0.2 | 0.4  |
+| WILD 7  | 0.4 | 1.5 | 14.8 |
+| DIAMOND | 0.3 | 0.9 | 4.2  |
+| BELL    | 0.2 | 0.6 | 2.5  |
+| BAR     | 0.2 | 0.5 | 1.7  |
+| GRAPES  | 0.1 | 0.3 | 1.1  |
+| ORANGE  | 0.1 | 0.3 | 0.9  |
+| PLUM    | 0.1 | 0.2 | 0.5  |
+| CHERRY  | 0.1 | 0.2 | 0.4  |
+| LEMON   | 0.1 | 0.2 | 0.3  |
 
 Those are the figures before the multipliers. A five-reel diamond win with
-four ways and two wilds in it pays 5.6 x 4 ways x 4 for the wilds, which is
-90 times the bet.
+four ways and two wilds in it pays 4.2 x 4 ways x 4 for the wilds, which is
+67 times the bet. The feature symbols - SCATTER, CROWN, JACKPOT, ULTIMATE,
+LUCKY COIN and WHEEL - pay nothing on a way; they start things.
 
 ## Bonus rounds
 
@@ -84,6 +90,42 @@ Where the meter ends up over a feature, measured:
 nine-panel pick round. Panels hide credits, a x2 multiplier, or one of three
 STOPs; the round runs until the third stop, so you usually get four or five
 picks. The multiplier applies to everything you collected.
+
+**HOLD & SPIN** — six or more LUCKY COINS anywhere. Every coin shows its
+value as it lands: half the bet up to 25 times it, or now and then a MINOR
+or MAJOR coin that pays that jackpot. The coins lock, every other cell
+becomes its own little reel, and you get **three respins; every new coin
+locks in and resets them to three**. It ends when they run out. Fill all 25
+cells and it is the GRAND: the MEGA jackpot on top of every coin. The coins
+are then counted into the meter one by one. About one spin in 250; the mean
+prize is about 13 times the bet.
+
+**WHEEL OF 7'S** — a WHEEL on each of reels 2, 3 and 4 brings on a 600-pixel
+wheel ringed with chasing bulbs. A spins it. Twenty-four wedges pay 5x to
+250x the bet, the MINOR and MAJOR jackpots, or SUPER, which swaps in the
+SUPER WHEEL (25x to 500x, the MAJOR and the MEGA) for another spin. The
+outcome is drawn from a weighted table the moment it starts spinning, and
+the wheel is then driven to stop inside that wedge, so what you see is
+what you get. About one spin in 390.
+
+**7 STRIKE** — at random, about one base-game spin in a hundred, a storm
+gathers over the reels while they spin. When they stop, three to eight
+lightning bolts strike, and every cell they hit becomes a WILD 7. Wilds
+double every path through them, so random wilds would pay wildly; the
+storm scores candidate placements through the real evaluator and keeps one
+near a target that rises with the bolt count. Nearly every storm pays at
+least the bet.
+
+**GAMBLE** — after any base-game win up to 50 times the bet, press X.
+LEFT calls RED and RIGHT calls BLACK for double; UP / DOWN chooses a suit
+and X plays it for four times. A, START or B collects. Up to five rounds.
+The card is an exactly uniform draw, so the gamble is a fair bet and does
+not move the return.
+
+A spin can trigger several of these at once. Its own wins are shown and
+paid first, then the features run one after another: HOLD & SPIN, the
+WHEEL, the PICK, then FREE SPINS. (Before version 3 a spin that opened the
+pick round or the free spins never paid its own line wins or scatter pay.)
 
 ## Progressive jackpots
 
@@ -144,11 +186,12 @@ rung; it comes out identical at all of them.
 |---|---|
 | Start / A | Spin, and slam the reels down mid-spin |
 | Left / Right (or Up / Down) | Bet |
-| X | Highest rung the bank covers, and spin |
+| X | Highest rung the bank covers, and spin. On a counted win: GAMBLE |
 | Y | Add credits — choose 100 to 5,000 |
-| Select | Pay table; Select again for the FEATURES page (the wild multiplier, both bonuses, the jackpots) |
+| Select | Pay table; Select again for FEATURES, again for MORE FEATURES |
 | B | Slam / cancel |
-| D-pad, A | Move and pick in the bonus round |
+| D-pad, A | Move and pick in the pick round; A spins the wheel |
+| Any button | During a big-win count, jump to the total; again to collect |
 
 If the bet is more than the bank, Start trims it to the highest rung you can
 afford rather than refusing. Out of credits? Start opens the ADD CREDITS
@@ -163,8 +206,10 @@ always worth waiting for, and a spin runs about six seconds end to end. If
 that is too slow, START, A or B slams the lot down at any point, and the
 turbo core option halves the gaps rather than removing them.
 
-The anticipation hold still sits on top: when two scatters or two crowns are
-already showing, the last reels are held back an extra second.
+The anticipation hold still sits on top: when two scatters, two crowns or
+two wheels are already showing, the last reels are held back an extra
+second, and the held reel burns: fire at its foot, electric arcs, the other
+reels dropped into shadow.
 
 ## Sound
 
@@ -240,6 +285,26 @@ end, and (`w7audio stat a.wav`) measures a recording.
 
 ## Graphics
 
+**Version 3** keeps the medallion look and lights all of it properly. The
+symbols are built from masks with a real bevelled, lit surface - a molten
+7 with fire round it, a faceted diamond with coloured fire, embossed gold
+bell, BAR, star and crown, glossy fruit - and the feature symbols shine and
+glint on the reels. The cabinet is a lit stage with light beams and bokeh,
+smoked-glass rails in chrome mouldings, a neon progressive sign in tier
+colours, illuminated buttons, and a marquee with searchlights and three
+bulb patterns; free spins swap in a night-sky cabinet with gold drums.
+
+Wins are staged the way a casino floor does it (`src/w7_fx.c`): a thousand
+particles, including gold coins pre-rendered in sixteen 3-D rotation frames
+that tumble and bounce on the deck; the winning symbols pop and beads of
+light run along each path; and above ten times the bet the count climbs
+through **BIG, SUPER, MEGA and EPIC WIN**, stalling at each line before
+the title slams up a tier with a shockwave, shake and a heavier coin
+fountain. Jackpots get god rays, coin rain and, for the ULTIMATE,
+fireworks. Every bonus opens with a title slam.
+
+What follows describes the version 2 foundations, which still hold.
+
 Every symbol sits on a **chrome-ringed, domed medallion** — the language of a
 modern cabinet's premium symbols. The ring gives a hard, bright edge against
 the cream drum, the dome gives the piece depth, and a gloss arc across the
@@ -291,22 +356,33 @@ window.
 `src/sim.c` includes this core's own source, so the evaluator under test is
 literally the one that ships — same strips, same way counter, same
 `snapshot_grid` (which is where expanding wilds live), same
-`bonus_fill_panels`, same jackpot trigger. Eight million spins at bet 10:
+`bonus_fill_panels`, same jackpot trigger - and each new feature plays out
+through its own module's `*_sim_play()`, which uses the very functions the
+game does. Eight million spins at bet 10 (version 3):
 
 ```
-game             75.25%     base 41.47 / free spins 28.99 / pick bonus 4.79
-contributions    10.00%     the tenth of every bet that feeds the four pots
-bet multiples     4.31%     what the house puts up: 5x, 40x, 200x, 100,000x
-RTP              89.55%     at every bet on the ladder, 10 through 100,000
-hit frequency    33.18%     1 in 3.0 spins
-free spins       1 in 210 spins
-pick bonus       1 in 262 spins
+RTP              93.9%     long run, identical at every bet from 10 to 100,000
+  base game      37.8%     including 7 STRIKE, one spin in 100
+  free spins     26.4%     one spin in 210
+  pick bonus      4.8%     one spin in 262
+  hold & spin     5.4%     one spin in 246
+  wheel           4.0%     one spin in 386
+  + the pot seeds the reels, coins and wedges pay, the tenth of every bet
+    that feeds the pots, and the ULTIMATE at its exact odds
+hit frequency    24.7%     1 in 4.1 spins
 ```
 
-Two thirds of the return comes off the reels and the other third through the
-jackpots, which is what a tenth of every bet feeding the pots buys. The free
-spins carry nearly as much as the base game: they are one spin in two
-hundred and pay 39% of everything that comes off the reels.
+**How that figure is counted.** HOLD & SPIN and the WHEEL can pay the pots
+too, and a Monte-Carlo run that lets the pots grow counts that money twice:
+once as the feature's prize, and again in the tenth of every bet that fed
+the pot. It also swings by whole percent on whether the sample happened to
+hit an ULTIMATE. So the simulator holds every pot at its seed (the bet
+multiple), then adds the contributions, which every pot eventually pays
+out, and the ULTIMATE's seed at its exact enumerated odds.
+`W7SIM_POTS=grow ./w7sim` gives the old as-they-fell figure.
+
+Getting there from 96.5%: 7 STRIKE went from one spin in 80 to one in 100,
+and the five-reel DIAMOND and BELL pays came down (4.8 to 4.2, 2.8 to 2.5).
 
 The way counter is a one-pass dynamic programme: a cell that matches
 inherits the path counts of the three cells beside it on the reel to the
@@ -380,7 +456,10 @@ RetroArch Quick Menu -> Core Options, or edit `wild7.w7`:
 - **Sound** (default on)
 - **Music** (default on) — the background tunes; the effects stay on
 - **Turbo spin** (default off) — halves the gaps between reel stops
-- **Flash limiter** (default on) — damps the win flashes
+- **Flash limiter** (default on) — damps the win flashes, the shake and the
+  storm's lightning
+- **Render threads** (default auto = 3 on a Pi 4) — how many cores draw the
+  frame; auto leaves one for RetroArch
 
 ## Test hooks
 
@@ -391,12 +470,24 @@ reel stop that happens to show the demanded symbols.
 ```
 WILD7_AUTOPILOT=1   spin loop        WILD7_FORCE=free    land 3 scatters
 WILD7_AUTOPILOT=2   open pay table   WILD7_FORCE=pick    land 3 crowns
-WILD7_AUTOPILOT=3   a single spin,   WILD7_FORCE=win     a 3-deep cherry band (needs stacked cherries)
+WILD7_AUTOPILOT=3   a single spin,   WILD7_FORCE=win     a 3-reel cherry line
                     then no input    WILD7_FORCE=minor   5 JACKPOTs  -> MINOR
 WILD7_AUTOPILOT=4   open ADD CREDITS WILD7_FORCE=mega    7 JACKPOTs  -> MEGA
 WILD7_AUTOPILOT=5   features page    WILD7_FORCE=ult     5 ULTIMATEs -> ULTIMATE
-WILD7_AUTOPILOT=6   climb the bet ladder to the top
+WILD7_AUTOPILOT=6   climb the ladder WILD7_FORCE=hold    6+ LUCKY COINS -> HOLD & SPIN
+                                     WILD7_FORCE=wheel   3 WHEELs -> WHEEL OF 7'S
+                                     WILD7_FORCE=storm   a 7 STRIKE on every base spin
+                                     WILD7_FORCE=big|super|megawin|epic  a genuine stop in that win band
+                                     WILD7_FORCE=fsmult  free spins with a wild every spin
+WILD7_HOLD=grand    with FORCE=hold: coins land freely, to reach the GRAND
+WILD7_THREADS=1..4  override the thread option     WILD7_PROFILE=1  render/update ms to stderr
 ```
+
+On the Windows box, `make shot` builds `w7shot`, a headless host that runs
+the real `retro_run()` loop and writes PNG frames (and `-w` a WAV) - see
+`DEVELOPING.md`. `tools/bandcheck.sh` proves the threaded renderer draws
+exactly what one thread draws; `tools/pi_soak.sh` soaks it on the Pi while
+logging temperature, throttling and per-core load.
 
 Frames can be captured headlessly, without disturbing EmulationStation, by
 running the core under a null video driver and asking RetroArch for a
