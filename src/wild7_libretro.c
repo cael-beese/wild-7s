@@ -1465,6 +1465,32 @@ static void flames(float cx,float cy,float s){
   cv_fire(cx-60*s,cy-56*s,cx+60*s,cy+8*s,flamePhase,77u,255);
 }
 
+/*  A blaze round the wild 7: the 7's own silhouette, blurred and lifted
+ *  a few units, becomes the fuel; turbulence scrolling up through it
+ *  gives the tongues.  Painted before the 7, so only the aura shows.  */
+static void seven_aura(float ox,float oy,float s){
+  static const uint32_t FIRE[6]={0x3A0200,0xB01404,0xFF4A08,0xFF9A18,0xFFE070,0xFFFFE0};
+  pt_t p[7]={{8,8},{84,8},{84,26},{59,89},{29,89},{61,27},{8,27}};
+  for(int i=0;i<7;i++){ p[i].x=U(ox+(p[i].x-46)*s); p[i].y=U(oy+(p[i].y-48)*s); }
+  m_clear(cvm); m_poly(cvm,p,7);
+  int x0,y0,x1,y1;
+  if(!f_blur(cvm,cvg,(int)U(5.5f),2,&x0,&y0,&x1,&y1)) return;
+  int lift=(int)U(5.0f);
+  const float R0=U(37.8f), cx=U(46), cy=U(46);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    int ys=y+lift; if(ys>=CANH) continue;
+    float a=cvg[ys*CANW+x];
+    if(a<0.02f) continue;
+    float dx=x+0.5f-cx, dy=y+0.5f-cy;
+    if(dx*dx+dy*dy>R0*R0) continue;                 /* inside the disc only */
+    float u=(float)x/CANW, v=(float)y/CANH;
+    float turb=fbm(u*10.0f,v*7.0f+flamePhase*3.0f,91u,4);
+    float I=clampf(a*2.8f+(turb-0.5f)*1.5f-0.12f,0,1)*clampf((1.0f-a)*4.0f,0,1);
+    if(I<0.05f) continue;
+    cv_px(x,y,ramp(FIRE,6,clampf(I*1.15f,0,1)),(int)(smooth01(0.05f,0.45f,I)*240));
+  }
+}
+
 /*  A banner across the lower medal: folded tails, a gold-rimmed band
  *  and the word in bubble type, sized to fit.                         */
 static void ribbon(float y,float w,const char*label,uint32_t top,uint32_t bot,uint32_t ink){
@@ -1597,6 +1623,7 @@ static void art_seven(void){
   if(!s7bg){ s7bg=(uint8_t*)malloc(sizeof canvas); s7fg=(uint8_t*)malloc(sizeof canvas); }
   if(s7bg && s7fg && s7cached){
     memcpy(canvas,s7bg,sizeof canvas);
+    seven_aura(46,49,0.64f);
     flames(47,30,0.52f);
     cv_over_layer(s7fg);
     return;
@@ -1611,10 +1638,12 @@ static void art_seven(void){
     memcpy(s7fg,canvas,sizeof canvas);
     s7cached=1;
     memcpy(canvas,s7bg,sizeof canvas);
+    seven_aura(46,49,0.64f);
     flames(47,30,0.52f);
     cv_over_layer(s7fg);
     return;
   }
+  seven_aura(46,49,0.64f);
   flames(47,30,0.52f);                       /* tips lick up behind the top bar */
   seven_shape(46,49,0.64f,body,5,1);
   ribbon(76.5f,40,"WILD",0xFFE9A8,0xC08A10,0x3A1400);
@@ -1777,7 +1806,7 @@ static void art_lemon(void){
   cv_ellipse(U(47),U(53),U(35),U(25),0x140E00,0x140E00,255);
   cv_fruit(U(14),U(51),U(6),U(4.5f),0x5A4000,0xE8B808,0xFFF6B0,0xFFD000,0,0,0);  /* nubs */
   cv_fruit(U(78),U(51),U(6),U(4.5f),0x5A4000,0xE8B808,0xFFF6B0,0xFFD000,0,0,0);
-  cv_fruit(U(46),U(51),U(32),U(23),0x5A3E00,0xF0C010,0xFFFBD0,0xFFA800,0.022f,1.9f,5u);
+  cv_fruit(U(46),U(51),U(32),U(23),0x4A3000,0xE0AC00,0xFFF4A8,0xFF9800,0.016f,1.9f,5u);
   leaf(U(62),U(29),U(11),U(5));
 }
 
@@ -2133,7 +2162,7 @@ static void build_sprites(void){
      baked in: a moving symbol does not cast a crisp shadow */
   for(int i=0;i<NSYM;i++){
     make_streak(&sym[i],&symb[i], 7,0.22f,225);
-    make_streak(&sym[i],&symb2[i],13,0.34f,205);
+    make_streak(&sym[i],&symb2[i],13,0.34f,222);
   }
   /* cast shadows are composited straight into the symbol sprites: same
      look, half the per-frame blits */
