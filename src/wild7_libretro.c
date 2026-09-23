@@ -2130,9 +2130,37 @@ static spr_t symfl[NFLAME];    /* the wild with its flames at four phases */
 static spr_t symb2[NSYM];      /* the long streak, reel at full speed    */
 static spr_t pickEmblem;       /* a red 7 on a gold medal: the pick panels */
 
-static void render_symbol(spr_t*s,void(*art)(void),int glass){
+/*  The same canvas resolved at twice the size, for the attract loop's
+ *  close-ups: sharper than magnifying the 106px sprite, and a plain blit
+ *  at run time rather than a scaled one.                              */
+static void cv_resolve2(spr_t*s){
+  const int K=SS/2, W=CANW/K, H=CANH/K;
+  s->w=W; s->h=H;
+  s->px=(uint8_t*)calloc((size_t)W*H,4);
+  if(!s->px){ s->w=s->h=0; return; }
+  for(int y=0;y<H;y++) for(int x=0;x<W;x++){
+    int r=0,g=0,b=0,a=0;
+    for(int j=0;j<K;j++) for(int i=0;i<K;i++){
+      uint8_t*p=canvas+(((y*K+j)*CANW)+(x*K+i))*4;
+      int pa=p[3];
+      r+=p[0]*pa; g+=p[1]*pa; b+=p[2]*pa; a+=pa;
+    }
+    uint8_t*o=s->px+((size_t)y*W+x)*4;
+    if(a>0){ o[0]=(uint8_t)(r/a); o[1]=(uint8_t)(g/a); o[2]=(uint8_t)(b/a); }
+    o[3]=(uint8_t)(a/(K*K));
+  }
+}
+static spr_t symBig[NSYM];     /* double-size close-ups, feature symbols only */
+
+static void render_symbol(spr_t*s,void(*art)(void),int glass,int idx){
   cv_clear(); art();
   if(glass) cv_glass();
+  if(idx>=0 && idx<NSYM && (idx==SY_SEVEN||idx>=SY_STAR)){
+    cv_resolve2(&symBig[idx]);
+    spr_sharpen(&symBig[idx],0.4f);
+    add_contour(&symBig[idx], SYMW/15, 0x0A0510, 255);
+    spr_bounds(&symBig[idx]);
+  }
   cv_resolve(s);
   spr_sharpen(s,0.55f);
   add_contour(s, SYMW/30, 0x0A0510, 255);   /* hard dark edge */
@@ -2145,10 +2173,10 @@ static void build_sprites(void){
                              art_star,art_crown,art_jackpot,art_ult,
                              art_coin,art_wheel };
   /* the coin and wheel belong to their modules, which light their own */
-  for(int i=0;i<NSYM;i++) render_symbol(&sym[i],art[i],i!=SY_COIN && i!=SY_WHEEL);
+  for(int i=0;i<NSYM;i++) render_symbol(&sym[i],art[i],i!=SY_COIN && i!=SY_WHEEL,i);
   for(int k=0;k<NFLAME;k++){
     flamePhase=0.19f+k*0.23f;
-    render_symbol(&symfl[k],art_seven,1);
+    render_symbol(&symfl[k],art_seven,1,-1);
   }
   flamePhase=0.0f;
   { static const uint32_t red[5]={0xFF8A70,0xFF3A28,0xE0101C,0x980614,0x4A020A};
@@ -3836,6 +3864,29 @@ static void bake_title(spr_t*o,const char*s,int px,const tstyle_t*ts){
  *  clip; cost is the destination area.                               */
 static void blit_scaled(const spr_t*s,int cx,int cy,float sc,int alpha){
   if(!s->px||sc<=0.01f||alpha<=0) return;
+  /* a big sprite in fast motion: point sampling, four times cheaper,
+     and nobody can see the difference while it is still moving */
+  if(s->w*sc*s->h*sc > 90000.0f){
+    int dw=(int)(s->w*sc), dh=(int)(s->h*sc), x0=cx-dw/2, y0=cy-dh/2;
+    int ya=y0<clip_y0?clip_y0:y0, yb=y0+dh>clip_y1?clip_y1:y0+dh;
+    int xa=x0<0?0:x0, xb=x0+dw>FBW?FBW:x0+dw;
+    int inv=(int)(65536.0f/sc);
+    for(int y=ya;y<yb;y++){
+      int iy=((y-y0)*inv)>>16; if(iy>=s->h) continue;
+      const uint8_t*row=s->px+(size_t)iy*s->w*4;
+      uint32_t*d=fb+(size_t)y*FBW;
+      for(int x=xa;x<xb;x++){
+        int ix=((x-x0)*inv)>>16; if(ix>=s->w) continue;
+        const uint8_t*p=row+ix*4;
+        int ea=p[3]*alpha>>8;
+        if(ea<=2) continue;
+        uint32_t dd=d[x];
+        int dr=(dd>>16)&255, dg=(dd>>8)&255, db=dd&255;
+        d[x]=RGB(dr+((p[0]-dr)*ea>>8), dg+((p[1]-dg)*ea>>8), db+((p[2]-db)*ea>>8));
+      }
+    }
+    return;
+  }
   int dw=(int)(s->w*sc), dh=(int)(s->h*sc);
   int x0=cx-dw/2, y0=cy-dh/2;
   int ya=y0<clip_y0?clip_y0:y0, yb=y0+dh>clip_y1?clip_y1:y0+dh;
@@ -3915,6 +3966,10 @@ static spr_t title[NTT];
 static spr_t bigdig[10];            /* big gold digits for the count-ups */
 static spr_t digX;                  /* the "X" that goes with them       */
 static spr_t bigPlus;               /* and the "+" of a retrigger        */
+#define NCAP 9
+static spr_t capSpr[NCAP];          /* the attract loop's captions       */
+static const char*CAPS[NCAP]={"WILD 7","SCATTER","LUCKY 7 PICK","HOLD & SPIN","WHEEL OF 7'S",
+                              "JACKPOT","ULTIMATE","4 PROGRESSIVE JACKPOTS","FEATURES"};
 
 static const uint32_t TGOLD[6]  ={0xFFFEF0,0xFFF0B0,0xFFD24A,0xE8A018,0xFFD870,0xA86A08};
 static const uint32_t TGREEN[5] ={0xF4FFE8,0xB8FF8A,0x3CD23C,0x16861E,0x7CE860};
@@ -3941,6 +3996,8 @@ static void build_titles(void){
   for(int d=0;d<10;d++){ char b[2]={(char)('0'+d),0}; bake_title(&bigdig[d],b,16,&gold); }
   bake_title(&digX,"X",11,&gold);
   bake_title(&bigPlus,"+",11,&gold);
+  { tstyle_t cap={TGOLD,6,0x1A0600,0xFF9020,0.70f,5,1,0.80f};
+    for(int i=0;i<NCAP;i++) bake_title(&capSpr[i],CAPS[i],5,&cap); }
 }
 static void spr_free_t(spr_t*s){ free(s->px); free(s->rx0); free(s->rx1); memset(s,0,sizeof *s); }
 static void free_titles(void){
@@ -3950,6 +4007,7 @@ static void free_titles(void){
   for(int i=0;i<10;i++) all[n++]=&bigdig[i];
   all[n++]=&digX;
   spr_free_t(&bigPlus);
+  for(int i=0;i<NCAP;i++) spr_free_t(&capSpr[i]);
   for(int i=0;i<n;i++){ free(all[i]->px); free(all[i]->rx0); free(all[i]->rx1); memset(all[i],0,sizeof(spr_t)); }
 }
 
@@ -5406,11 +5464,17 @@ static void draw_attract(void){
     float lt=u-i*(8.0f/7.0f);
     const show_t*sh=&SHOW[i];
     dim_burst(MQH,0,FBW/2,250,artT*0.10f,16,sh->col,opt_limiter?120:200,0,1,0,0);
-    float z=2.3f*ease_back(lt*3.2f);
+    /* the close-up pops in and out; while it holds, it is a plain blit */
+    float z=ease_back(lt*3.2f);
     if(lt>1.0f) z*=1.0f-(lt-1.0f)*4.0f;
-    if(z>0.05f) blit_scaled(&sym[sh->sy],FBW/2,250,z,255);
+    const spr_t*bs=&symBig[sh->sy];
+    if(bs->px){
+      if(z>0.985f && z<1.015f) blit(bs,FBW/2-bs->w/2,250-bs->h/2,0,FBH,255,0,0.0f);
+      else if(z>0.05f) blit_scaled(bs,FBW/2,250,z*1.08f,255);
+    } else if(z>0.05f) blit_scaled(&sym[sh->sy],FBW/2,250,z*2.3f,255);
     if(lt>0.25f && lt<1.08f){
-      textb(sh->name,FBW/2,392,5,GOLDG,5,1);
+      { const spr_t*c=&capSpr[i]; blit(c,FBW/2-c->w/2,410-c->h/2,0,FBH,255,0,0.0f); }
+      banner_plate(FBW/2,476,820,70,sh->col);
       text(sh->l1,FBW/2,456,3,0xFFFFFF,1,1);
       text(sh->l2,FBW/2,488,2,mixc(sh->col,0xFFFFFF,0.35f),1,1);
     }
@@ -5418,7 +5482,7 @@ static void draw_attract(void){
     /* four progressives, lit like the sign on the rail */
     float u=T-14.0f;
     dim_burst(MQH,0,FBW/2,300,artT*0.05f,24,0xC060FF,opt_limiter?90:150,0,1,0,0);
-    textb("4 PROGRESSIVE JACKPOTS",FBW/2,96,5,GOLDG,5,1);
+    { const spr_t*c=&capSpr[7]; blit(c,FBW/2-c->w/2,114-c->h/2,0,FBH,255,0,0.0f); }
     static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
     for(int k=0;k<NJP;k++){
       float d=clampf((u-k*0.18f)*3.0f,0,1);
@@ -5435,7 +5499,7 @@ static void draw_attract(void){
     dim_burst(MQH,0,FBW/2,330,artT*0.06f,18,0xFFB030,opt_limiter?80:130,0,1,0,0);
     fb_shade_rect(GX-8,150,GW+16,356,0x05030C,150);
     fb_rframe(GX-8,150,GW+16,356,14,2.0f,0xFFD24A,200);
-    textb("FEATURES",FBW/2,86,5,GOLDG,5,1);
+    { const spr_t*c=&capSpr[8]; blit(c,FBW/2-c->w/2,104-c->h/2,0,FBH,255,0,0.0f); }
     for(int k=0;k<9;k++){
       float d=clampf((u-k*0.12f)*4.0f,0,1);
       if(d<=0) continue;
@@ -5468,6 +5532,7 @@ static void draw_attract(void){
 #define PK_BY 166
 enum { TILE_CLOSED, TILE_CREDIT, TILE_MULT, TILE_STOP, NTILE };
 static spr_t tileSpr[NTILE];
+static spr_t pkGlow;          /* the cursor's neon, baked: gold halo and a white tube */
 
 static void pk_tile_xy(int i,int*x,int*y){
   *x=PK_BX+(i%3)*(PK_PW+PK_GX); *y=PK_BY+(i/3)*(PK_PH+PK_GY);
@@ -5688,7 +5753,8 @@ static void draw_bonus(void){
     if(G.pickT>FLIP*0.5f && f>0){
       int kind=G.pickKind[flipIdx];
       uint32_t fc = kind==PICK_STOP?0xFF3020:(kind==PICK_MULT?0x60FF80:0xFFD060);
-      for(int q=0;q<6;q++) fb_rframe(x-2-q*3,y-2-q*3,PK_PW+4+q*6,PK_PH+4+q*6,20+q*3,3.0f,fc,(int)((230-q*38)*f));
+      (void)fc;
+      blit_add(&pkGlow,x-22,y-22,(int)(255*f));
       blit_add(&sparkspr,x-7,y-7,(int)(255*f)); blit_add(&sparkspr,x+PK_PW-7,y+PK_PH-7,(int)(255*f));
     }
   }
@@ -5706,9 +5772,7 @@ static void draw_bonus(void){
   /* the cursor: a breathing neon frame with sparks running round it */
   { int x,y; pk_tile_xy(G.pickCur,&x,&y);
     float pl=0.5f+0.5f*sinf(artT*8.0f);
-    uint32_t cc=mixc(0xFFD24A,0xFFFFFF,pl*0.6f);
-    for(int q=0;q<5;q++) fb_rframe(x-5-q*2,y-5-q*2,PK_PW+10+q*4,PK_PH+10+q*4,22+q*2,2.0f,cc,(int)((200-q*40)*(0.6f+0.4f*pl)));
-    fb_rframe(x-4,y-4,PK_PW+8,PK_PH+8,21,2.5f,0xFFFFFF,(int)(200+55*pl));
+    blit_add(&pkGlow,x-22,y-22,(int)(150+106*pl));
     float per=2.0f*(PK_PW+PK_PH+24);
     for(int i=0;i<6;i++){
       float d=fmodf(artT*420.0f+i*per/6.0f,per);
@@ -5724,6 +5788,21 @@ static void draw_bonus(void){
 /* baked at init: the panel faces, and the stage, so no frame of the
    bonus ever has to paint a full-screen gradient */
 static void build_pick_assets(void){
+  { const int M=22, w=PK_PW+2*M, h=PK_PH+2*M;
+    pkGlow.w=w; pkGlow.h=h;
+    pkGlow.px=(uint8_t*)calloc((size_t)w*h,4);
+    if(pkGlow.px){
+      for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+        float d=rr_sdf(i+0.5f,j+0.5f,w*0.5f,h*0.5f,PK_PW*0.5f+5,PK_PH*0.5f+5,22.0f);
+        float halo=d>0?expf(-d*0.22f):expf(d*0.9f);
+        float tube=clampf(1.6f-fabsf(d)*0.8f,0,1);
+        float r=255*(halo*0.85f+tube), g=210*halo*0.85f+255*tube, b=90*halo*0.85f+255*tube;
+        if(r+g+b<6) continue;
+        uint8_t*o=pkGlow.px+((size_t)j*w+i)*4;
+        o[0]=(uint8_t)clampi((int)r,0,255); o[1]=(uint8_t)clampi((int)g,0,255); o[2]=(uint8_t)clampi((int)b,0,255); o[3]=255;
+      }
+      spr_bounds(&pkGlow);
+    } }
   uint32_t*save=(uint32_t*)malloc(sizeof bg);
   if(!save) return;
   memcpy(save,fb,sizeof bg);
@@ -6011,7 +6090,7 @@ static void draw_marquee(void){
 /*  Everything the art bakes at init, freed on the way out.            */
 static void spr_free(spr_t*s){ free(s->px); free(s->rx0); free(s->rx1); memset(s,0,sizeof *s); }
 static void art_free(void){
-  for(int i=0;i<NSYM;i++) spr_free(&symb2[i]);
+  for(int i=0;i<NSYM;i++){ spr_free(&symb2[i]); spr_free(&symBig[i]); }
   for(int k=0;k<NFLAME;k++) spr_free(&symfl[k]);
   free(bgBase); bgBase=NULL; free(bgFree); bgFree=NULL; bgShown=0;
   free(s7bg); free(s7fg); s7bg=s7fg=NULL; s7cached=0;
@@ -6022,6 +6101,7 @@ static void art_free(void){
   spr_free(&fireStrip);
   spr_free(&pickEmblem);
   for(int k=0;k<NTILE;k++) spr_free(&tileSpr[k]);
+  spr_free(&pkGlow);
   free(rayAng); free(rayFall); rayAng=rayFall=NULL;
   for(int k=0;k<NFF;k++) spr_free(&fireFade[k]);
   free_titles();
