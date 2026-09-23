@@ -1722,150 +1722,11 @@ static void jp_contribute(int bet){
     G.jpAcc[i] += (long long)((double)bet*JP_RATE[i]*1000.0);
 }
 
-/* ═══ AUDIO ═══════════════════════════════════════════════════════ */
-typedef struct { int on,type; float ph,f0,f1,t,dur,vol,lp,del; } voice_t;
-#define NVOICE 48                  /* a fanfare queues two dozen at once */
-static voice_t voices[NVOICE];
-static float mus_ph=0, mus_t=0;
-
-static void snd(float f0,float f1,float dur,int type,float vol){
-  if(!opt_sound) return;
-  for(int i=0;i<NVOICE;i++) if(!voices[i].on){
-    voices[i]=(voice_t){1,type,0,f0,f1,0,dur,vol,0,0}; return;
-  }
-}
-static void snd_noise(float dur,float vol,float lp){
-  if(!opt_sound) return;
-  for(int i=0;i<NVOICE;i++) if(!voices[i].on){
-    voices[i]=(voice_t){1,3,0,lp,lp,0,dur,vol,0,0}; return;
-  }
-}
-
-/* ── queued notes ─────────────────────────────────────────────────
- *  Everything above fires the instant it is asked for, which is fine for
- *  a button click and useless for a fanfare.  A voice can now be handed
- *  a start delay instead, so a phrase is written the way a music box is
- *  punched: all of its notes queued at once, at their offsets, and the
- *  mixer holds each one back until its moment.
- * ---------------------------------------------------------------- */
-static void snd_at(float del,float f0,float f1,float dur,int type,float vol){
-  if(!opt_sound) return;
-  for(int i=0;i<NVOICE;i++) if(!voices[i].on){
-    voices[i]=(voice_t){1,type,0,f0,f1,0,dur,vol,0,del}; return;
-  }
-}
-static void snd_noise_at(float del,float dur,float vol,float lp){
-  if(!opt_sound) return;
-  for(int i=0;i<NVOICE;i++) if(!voices[i].on){
-    voices[i]=(voice_t){1,3,0,lp,lp,0,dur,vol,0,del}; return;
-  }
-}
-/* a triad: triangle root and third, square fifth underneath */
-static void snd_chord(float t0,float a,float b,float c,float dur,float vol){
-  snd_at(t0,a,a,dur,1,vol);
-  snd_at(t0,b,b,dur,1,vol*0.80f);
-  snd_at(t0,c,c,dur,0,vol*0.45f);
-}
-
-/* ── the fanfares ─────────────────────────────────────────────────
- *  Four waveforms and a decaying envelope is not much of an orchestra,
- *  so each prize gets a phrase rather than a noise, and the phrases are
- *  built to be told apart with your back to the machine: they get
- *  longer, lower-rooted and denser as the prize grows.  MINOR is three
- *  notes and gone, the ULTIMATE is five seconds with a bass line.
- * ---------------------------------------------------------------- */
-static void sfx_jackpot(int tier){
-  switch(tier){
-  case JP_MINOR:                              /* three notes up, ~0.8s */
-    snd_noise_at(0.00f,0.10f,0.10f,5000);
-    snd_at(0.00f, 784, 784,0.14f,1,0.20f);
-    snd_at(0.10f,1046,1046,0.14f,1,0.20f);
-    snd_at(0.20f,1318,1318,0.36f,1,0.22f);
-    snd_at(0.20f, 659, 659,0.36f,0,0.09f);
-    snd_at(0.44f,2093,2637,0.30f,0,0.07f);
-    break;
-  case JP_MAJOR: {                            /* arpeggio into a chord */
-    static const float n[4]={523,659,784,1046};
-    snd_noise_at(0.00f,0.14f,0.12f,4000);
-    for(int i=0;i<4;i++) snd_at(i*0.10f,n[i],n[i],0.16f,1,0.20f);
-    snd_chord(0.42f,1046,1318,1568,0.70f,0.20f);
-    snd_at(0.42f,262,262,0.75f,2,0.11f);                  /* bass       */
-    snd_at(1.05f,2093,3136,0.40f,0,0.07f);
-    break; }
-  case JP_MEGA:                               /* a triple-tongue call  */
-    snd_noise_at(0.00f,0.20f,0.16f,3000);
-    snd_at(0.00f, 784, 784,0.12f,1,0.22f);
-    snd_at(0.16f, 784, 784,0.12f,1,0.22f);
-    snd_at(0.32f, 784, 784,0.12f,1,0.22f);
-    snd_at(0.48f,1046,1046,0.55f,1,0.24f);
-    snd_at(0.48f, 523, 523,0.55f,2,0.11f);
-    snd_chord(1.05f,1318,1568,2093,0.90f,0.22f);
-    snd_at(1.05f, 330, 330,0.95f,2,0.11f);
-    snd_at(1.05f, 175, 175,1.20f,2,0.09f);
-    for(int i=0;i<6;i++)
-      snd_at(2.00f+i*0.07f, 2093.0f+i*180.0f, 3000, 0.20f,0,0.055f);
-    break;
-  default: {                                  /* the ULTIMATE, ~5s     */
-    static const float run[8]={523,587,659,784,880,1046,1175,1319};
-    snd_noise_at(0.00f,0.35f,0.20f,2200);                 /* crash      */
-    for(int i=0;i<8;i++) snd_at(i*0.075f,run[i],run[i],0.14f,1,0.17f);
-    snd_chord(0.62f,1046,1318,1568,1.20f,0.24f);
-    snd_at(0.62f,262,262,1.30f,2,0.13f);
-    snd_at(0.62f,131,131,1.60f,2,0.11f);
-    snd_noise_at(0.62f,0.30f,0.13f,2500);
-    snd_chord(1.95f,1175,1568,2093,1.40f,0.24f);
-    snd_at(1.95f,294,294,1.50f,2,0.13f);
-    snd_at(1.95f,147,147,1.80f,2,0.11f);
-    snd_noise_at(1.95f,0.30f,0.13f,2500);
-    for(int i=0;i<10;i++)                                 /* bells out  */
-      snd_at(3.30f+i*0.09f, 2093.0f*(1.0f+0.06f*i), 2600, 0.35f,1,0.085f);
-    break; }
-  }
-}
-
-/*  The meter climbing.  The root rises with the level, so the ear knows
- *  how high it went without reading the panel.                        */
-static void sfx_mult(int lvl){
-  static const float root[6]={0,1046,1046,1318,1568,2093};
-  float r = root[lvl<1?1:(lvl>5?5:lvl)];
-  snd_noise_at(0.00f,0.07f,0.07f,6000);
-  snd_at(0.00f,r*0.5f,r*0.5f,0.12f,1,0.16f);
-  snd_at(0.06f,r,     r,     0.30f,1,0.22f);
-  snd_at(0.14f,r*1.5f,r*1.5f,0.34f,0,0.10f);
-  snd_at(0.26f,r*2.0f,r*2.5f,0.30f,0,0.07f);
-}
-static void audio_frame(void){
-  float sr=(float)SRATE;
-  for(int i=0;i<SPF;i++){
-    float mix=0;
-    for(int v=0;v<NVOICE;v++){
-      voice_t*V=&voices[v]; if(!V->on) continue;
-      if(V->del>0.0f){ V->del -= 1.0f/sr; continue; }   /* not yet */
-      float u=V->t/V->dur;
-      if(u>=1.0f){ V->on=0; continue; }
-      float amp=V->vol*(1.0f-u)*(1.0f-u);
-      float s;
-      if(V->type==3){
-        float w=frnd()*2.0f-1.0f;
-        float al=clampf(V->f0/(sr*0.5f),0.002f,0.95f);
-        V->lp += al*(w-V->lp);
-        s=V->lp;
-      } else {
-        float f=V->f0+(V->f1-V->f0)*u;
-        V->ph += f/sr; if(V->ph>=1.0f) V->ph-=1.0f;
-        if(V->type==0)      s = V->ph<0.5f?1.0f:-1.0f;
-        else if(V->type==1) s = 4.0f*fabsf(V->ph-0.5f)-1.0f;
-        else                s = V->ph*2.0f-1.0f;
-      }
-      mix += s*amp;
-      V->t += 1.0f/sr;
-    }
-    mix = clampf(mix,-1.0f,1.0f);
-    int16_t o=(int16_t)(mix*20000.0f);
-    abuf[i*2]=o; abuf[i*2+1]=o;
-  }
-  (void)mus_ph; (void)mus_t;
-}
+/* ═══ AUDIO ═══════════════════════════════════════════════════════
+ *  The synth, the music and every sound effect live in w7_audio.c
+ *  (public calls listed in w7_audio.h).  Included here rather than with
+ *  the other modules because update() below calls it.                 */
+#include "w7_audio.c"
 
 /* ═══ REEL / EVALUATION ═══════════════════════════════════════════ */
 static inline int stripAt(int r,int i){
@@ -2074,8 +1935,7 @@ static void start_spin(void){
     d += gap0 + frnd()*gapr;
     G.reelBlur[r]=0;
   }
-  snd_noise(0.18f,0.16f,3000);
-  snd(180,90,0.20f,2,0.10f);
+  sfx_spin_start();
 }
 
 /* Panel kinds: 0 credits, 1 multiplier, 2 stop.
@@ -2110,7 +1970,7 @@ static void begin_bonus(void){
   G.pickMult=1;
   bonus_fill_panels(G.pickKind,G.pickVal);
   for(int i=0;i<NPICK;i++) G.pickDone[i]=0;
-  snd(440,1320,0.5f,1,0.18f); snd(660,1980,0.6f,0,0.12f);
+  sfx_bonus_start();
 }
 
 /* ═══ INPUT ═══════════════════════════════════════════════════════ */
@@ -2211,7 +2071,7 @@ static void next_feature(void){
   if(G.pend&PEND_WHEEL){ G.pend&=~PEND_WHEEL; wheel_begin(); return; }
   if(G.pend&PEND_PICK) { G.pend&=~PEND_PICK;  begin_bonus(); return; }
   if(G.pend&PEND_FS)   { G.pend&=~PEND_FS;
-    G.state=ST_FSINTRO; G.t=0; snd(523,1046,0.5f,1,0.2f); return; }
+    G.state=ST_FSINTRO; G.t=0; sfx_fs_intro(); return; }
   after_result();
 }
 /*  A module calls this when its feature is over and its prize has been
@@ -2246,7 +2106,7 @@ static int max_affordable(void){
 static void open_addcr(int from){
   G.addFrom=from; G.addIdx=2;              /* 500, the old default */
   G.state=ST_ADDCR; G.t=0;
-  snd(600,900,0.06f,0,0.08f);
+  sfx_ui_open();
 }
 
 /*  Test hooks: which rows of which reel must show which symbol.  Each
@@ -2299,7 +2159,7 @@ static void update(void){
         /* anticipation: hold the last reels when a bonus is live */
         if(r>=3 && G.rt1[r]==0.0f && partial_special()>=2){
           G.rt1[r]=1.0f; G.rdelay[r]=0.95f;
-          snd(300,320,0.5f,1,0.05f);
+          sfx_anticipation(r);
         } else {
           G.rstate[r]=2; G.ru[r]=0;
           G.rt0[r]=G.rpos[r];
@@ -2325,7 +2185,7 @@ static void update(void){
       G.reelBlur[r] = 1.0f-u;
       if(G.ru[r]>=1.0f){
         G.rstate[r]=3; G.rpos[r]=G.rt1[r]; G.reelBlur[r]=0;
-        snd(150,70,0.10f,2,0.13f); snd_noise(0.07f,0.10f,1800);
+        sfx_reel_stop(r);
       }
       allstop=0;
     }
@@ -2347,11 +2207,11 @@ static void update(void){
     }
     if(G.idle>25.0f){ G.state=ST_ATTRACT; G.t=3.0f; break; }
     if(hit(B_RIGHT)||hit(B_UP)){
-      if(G.betIdx<BETMAXIDX){ G.betIdx++; snd(900,1200,0.05f,0,0.08f); } else snd(300,300,0.05f,0,0.06f);
+      if(G.betIdx<BETMAXIDX){ G.betIdx++; sfx_bet_up(G.betIdx); } else sfx_bet_limit();
       flash_btn(2);
     }
     if(hit(B_LEFT)||hit(B_DOWN)){
-      if(G.betIdx>0){ G.betIdx--; snd(900,600,0.05f,0,0.08f); } else snd(300,300,0.05f,0,0.06f);
+      if(G.betIdx>0){ G.betIdx--; sfx_bet_down(G.betIdx); } else sfx_bet_limit();
       flash_btn(1);
     }
     if(hit(B_SELECT)){ flash_btn(0); G.state=ST_PAYTABLE; G.ptPage=0; G.t=0; break; }
@@ -2366,7 +2226,7 @@ static void update(void){
       if(G.credits>=TOTBET) start_spin();
       else {
         int k=max_affordable();
-        if(k>=0){ G.betIdx=k; snd(500,350,0.12f,1,0.10f); flash_btn(1); }   /* bet trimmed to the bank */
+        if(k>=0){ G.betIdx=k; sfx_bet_trim(); flash_btn(1); }   /* bet trimmed to the bank */
         else { G.state=ST_BROKE; G.t=0; }
       }
     }
@@ -2407,7 +2267,7 @@ static void update(void){
       if(G.winTotal>0){
         G.state=ST_SHOWWIN; G.t=0; G.showIdx=0; G.showT=0; G.winShown=0;
         G.flash = opt_limiter?0.35f:0.7f;
-        if(G.winTotal >= TOTBET*40){ G.banner=2; G.bannerT=3.4f; snd(392,784,0.7f,1,0.2f); }
+        if(G.winTotal >= TOTBET*40){ G.banner=2; G.bannerT=3.4f; sfx_big_win_tier(G.winTotal>=TOTBET*150?2:1); }
         else if(G.winTotal >= TOTBET*10){ G.banner=1; G.bannerT=2.4f; }
       }
       else next_feature();
@@ -2419,7 +2279,7 @@ static void update(void){
     if(G.winShown < G.winTotal){
       G.winShown += step;
       if(G.winShown > G.winTotal) G.winShown = G.winTotal;
-      if(((int)(G.t*60))%3==0) snd(1200+irnd(200),1600,0.04f,0,0.05f);
+      if(((int)(G.t*60))%3==0) sfx_win_tick((float)G.winShown/(float)G.winTotal);
     }
     G.showT += DT;
     if(G.nWin>0 && G.showT>0.85f){
@@ -2452,7 +2312,7 @@ static void update(void){
         spawn_burst(FBW*0.5f + (frnd()-0.5f)*420.0f, 300.0f, 6, 0xFFD24A);
         /* the coin ticks climb while the amount rolls up */
         float k=clampf(G.t/run,0,1);
-        snd(1500.0f+k*1300.0f, 2300.0f+k*1300.0f, 0.05f,0,0.035f);
+        sfx_jackpot_tick(k);
       } }
     if(G.t>(G.jpWon==JP_ULT?7.0f:4.2f) || (G.t>1.4f && anyhit())){
       award(G.jpAmt);
@@ -2477,17 +2337,17 @@ static void update(void){
     break;
 
   case ST_BONUS: {
-    if(hit(B_LEFT)||hit(B_L))  { G.pickCur=(G.pickCur+NPICK-1)%NPICK; snd(800,900,0.04f,0,0.07f); }
-    if(hit(B_RIGHT)||hit(B_R)) { G.pickCur=(G.pickCur+1)%NPICK;       snd(800,900,0.04f,0,0.07f); }
-    if(hit(B_UP))              { G.pickCur=(G.pickCur+NPICK-3)%NPICK; snd(800,900,0.04f,0,0.07f); }
-    if(hit(B_DOWN))            { G.pickCur=(G.pickCur+3)%NPICK;       snd(800,900,0.04f,0,0.07f); }
+    if(hit(B_LEFT)||hit(B_L))  { G.pickCur=(G.pickCur+NPICK-1)%NPICK; sfx_ui_move(-1); }
+    if(hit(B_RIGHT)||hit(B_R)) { G.pickCur=(G.pickCur+1)%NPICK;       sfx_ui_move(+1); }
+    if(hit(B_UP))              { G.pickCur=(G.pickCur+NPICK-3)%NPICK; sfx_ui_move(-1); }
+    if(hit(B_DOWN))            { G.pickCur=(G.pickCur+3)%NPICK;       sfx_ui_move(+1); }
     if(hit(B_A)||hit(B_START)||hit(B_B)){
       int i=G.pickCur;
       if(!G.pickDone[i]){
         G.pickDone[i]=1; G.pickT=0;
         if(G.pickKind[i]==PICK_STOP){
           G.pickStops++;
-          snd(300,120,0.35f,2,0.14f);
+          sfx_pick_stop(G.pickStops);
           if(G.pickStops>=3){
             G.state=ST_BONUSEND; G.t=0; G.banner=4; G.bannerT=3.0f;
           }
@@ -2497,7 +2357,7 @@ static void update(void){
           G.flash = opt_limiter?0.3f:0.6f;
         } else {
           G.pickTotal += G.pickVal[i];
-          snd(660,1320,0.20f,1,0.16f); snd(990,1980,0.25f,0,0.10f);
+          sfx_pick_reveal(G.pickVal[i]);
           G.flash = opt_limiter?0.25f:0.5f;
         }
       }
@@ -2514,7 +2374,7 @@ static void update(void){
 
   case ST_PAYTABLE:
     if(G.t>0.3f){
-      if(hit(B_SELECT)){ G.ptPage^=1; G.t=0; snd(700,900,0.05f,0,0.08f); }
+      if(hit(B_SELECT)){ G.ptPage^=1; G.t=0; sfx_ui_page(); }
       else if(anyhit()){ G.state=ST_IDLE; G.t=0; }
     }
     break;
@@ -2524,12 +2384,12 @@ static void update(void){
     break;
 
   case ST_ADDCR:
-    if(hit(B_RIGHT)||hit(B_UP))  { G.addIdx=(G.addIdx+1)%NADDS;       snd(700,900,0.05f,0,0.08f); }
-    if(hit(B_LEFT)||hit(B_DOWN)) { G.addIdx=(G.addIdx+NADDS-1)%NADDS; snd(700,500,0.05f,0,0.08f); }
+    if(hit(B_RIGHT)||hit(B_UP))  { G.addIdx=(G.addIdx+1)%NADDS;       sfx_ui_move(+1); }
+    if(hit(B_LEFT)||hit(B_DOWN)) { G.addIdx=(G.addIdx+NADDS-1)%NADDS; sfx_ui_move(-1); }
     if(hit(B_A)||hit(B_START)){
       G.credits += ADDS[G.addIdx];
       flash_btn(4);
-      snd(440,880,0.25f,1,0.18f); snd(660,1320,0.3f,0,0.12f);
+      sfx_add_credits(ADDS[G.addIdx]);
       spawn_burst(RRX+RAILW/2, GY+30, 14, 0x8AF0FF);
       G.state=ST_IDLE; G.t=0;
     } else if(hit(B_B)||hit(B_SELECT)||hit(B_Y)){
@@ -3804,6 +3664,7 @@ void retro_get_system_av_info(struct retro_system_av_info*info){
 
 static const struct retro_variable VARS[] = {
   { "wild7_sound",    "Sound; on|off" },
+  { "wild7_music",    "Music; on|off" },
   { "wild7_turbo",    "Turbo spin; off|on" },
   { "wild7_limiter",  "Flash limiter (photosensitivity); on|off" },
   { NULL, NULL }
@@ -3812,6 +3673,8 @@ static void check_vars(void){
   struct retro_variable v;
   v.key="wild7_sound"; v.value=NULL;
   if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_sound  = strcmp(v.value,"off")!=0;
+  v.key="wild7_music"; v.value=NULL;
+  if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_music  = strcmp(v.value,"off")!=0;
   v.key="wild7_turbo"; v.value=NULL;
   if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_turbo  = strcmp(v.value,"on")==0;
   v.key="wild7_limiter"; v.value=NULL;
@@ -3859,6 +3722,7 @@ bool retro_load_game(const struct retro_game_info*info){
     memcpy(buf,info->data,m); buf[m]=0;
     for(char*p=buf;*p;p++) if(*p>='A'&&*p<='Z') *p+=32;
     if(strstr(buf,"sound=off"))   opt_sound=0;
+    if(strstr(buf,"music=off"))   opt_music=0;
     if(strstr(buf,"turbo=on"))    opt_turbo=1;
     if(strstr(buf,"limiter=off")) opt_limiter=0;
     const char*c=strstr(buf,"credits=");

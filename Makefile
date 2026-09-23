@@ -92,11 +92,15 @@ clean-android:
 #  Development tools (also build in WSL):
 #    make sim     RTP simulator  ->  ./w7sim 5000000 [betIdx]
 #    make shot    headless frame dumper -> ./w7shot -n 600 -s 120,599 -o dir
+#    make audio   sound bench + WAV stats -> ./w7audio ; ./w7audio stat a.wav
 # =====================================================================
-.PHONY: sim shot
+.PHONY: sim shot audio
 sim: w7sim
 shot: w7shot
+audio: w7audio
 w7sim: src/sim.c $(SRC) $(HDR) $(MODS)
 	$(CC) -O2 -Isrc -o $@ src/sim.c -lm -lpthread
 w7shot: tools/w7shot.c $(SRC) $(HDR) $(MODS)
 	$(CC) -O2 -Isrc -o $@ tools/w7shot.c -lm -lz -lpthread
+w7audio: tools/w7audio.c $(SRC) $(HDR) $(MODS)
+	$(CC) -O3 -ffast-math -fno-math-errno -Isrc -o $@ tools/w7audio.c -lm -lpthread

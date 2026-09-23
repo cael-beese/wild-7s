@@ -17,18 +17,39 @@
  *              WILD7_AUTOPILOT is set (the core's own pilot wins).
  *  -p NAME     file name prefix (default f)
  *  -r SEED     rng seed
+ *  -w FILE     write everything handed to audio_batch_cb as a 16-bit
+ *              stereo WAV, and print its peak / RMS / DC
  *
  *  The WILD7_AUTOPILOT / WILD7_FORCE environment hooks work as on the Pi.
  *  Prints mean / max ms per frame at the end (x86 numbers: the Pi 4 is
  *  roughly 4-6x slower per core - measure there before trusting a budget).
  * ===================================================================== */
+#define W7_AUDIO_PROF                /* time audio_frame() on its own */
 #include "../src/wild7_libretro.c"
 #include <zlib.h>
 #include <time.h>
 
 static const uint32_t *last_fb;
 static void vid(const void*d,unsigned w,unsigned h,size_t p){ (void)w;(void)h;(void)p; last_fb=(const uint32_t*)d; }
-static size_t aud(const int16_t*d,size_t f){ (void)d; return f; }
+/*  WAV capture.  The header is written with zero sizes and patched when
+ *  the run ends; level statistics are gathered on the way through.   */
+static FILE *wavf; static long wav_frames;
+static double wav_sq[2], wav_sum[2]; static int wav_pk[2]; static long wav_clip;
+static void le32(FILE*f,uint32_t v){ unsigned char b[4]={v,v>>8,v>>16,v>>24}; fwrite(b,1,4,f); }
+static void le16(FILE*f,uint16_t v){ unsigned char b[2]={v,v>>8}; fwrite(b,1,2,f); }
+static void wav_head(FILE*f,uint32_t frames){
+  fwrite("RIFF",1,4,f); le32(f,36+frames*4); fwrite("WAVEfmt ",1,8,f);
+  le32(f,16); le16(f,1); le16(f,2); le32(f,SRATE); le32(f,SRATE*4); le16(f,4); le16(f,16);
+  fwrite("data",1,4,f); le32(f,frames*4);
+}
+static size_t aud(const int16_t*d,size_t f){
+  if(wavf){
+    fwrite(d,sizeof(int16_t),f*2,wavf); wav_frames+=(long)f;
+    for(size_t i=0;i<f*2;i++){ int c=i&1, v=d[i], a=v<0?-v:v;
+      wav_sum[c]+=v; wav_sq[c]+=(double)v*v; if(a>wav_pk[c]) wav_pk[c]=a; if(a>=32000) wav_clip++; }
+  }
+  return f;
+}
 static void inpoll(void){}
 static int cur_btn;
 static int16_t inst(unsigned port,unsigned dev,unsigned idx,unsigned id){
@@ -97,6 +118,7 @@ static double now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&t
 
 int main(int argc,char**argv){
   long N=300; const char*outdir="."; const char*saves="299"; const char*script=NULL; const char*pfx="f";
+  const char*wavpath=NULL;
   for(int i=1;i<argc;i++){
     if(!strcmp(argv[i],"-n")&&i+1<argc) N=atol(argv[++i]);
     else if(!strcmp(argv[i],"-s")&&i+1<argc) saves=argv[++i];
@@ -104,6 +126,7 @@ int main(int argc,char**argv){
     else if(!strcmp(argv[i],"-i")&&i+1<argc) script=argv[++i];
     else if(!strcmp(argv[i],"-p")&&i+1<argc) pfx=argv[++i];
     else if(!strcmp(argv[i],"-r")&&i+1<argc) rngs=(uint32_t)strtoul(argv[++i],NULL,0);
+    else if(!strcmp(argv[i],"-w")&&i+1<argc) wavpath=argv[++i];
   }
   int every=0; if(!strncmp(saves,"every:",6)) every=atoi(saves+6);
   static long savef[256]; int ns=0;
@@ -115,6 +138,7 @@ int main(int argc,char**argv){
     for(char*t=strtok_r(tmp,";",&save);t&&nsc<512;t=strtok_r(NULL,";",&save)){
       char*c=strchr(t,':'); if(!c) continue; *c=0; sf[nsc]=atol(t); sb[nsc]=parse_btn(c+1); nsc++; } }
 
+  if(wavpath){ wavf=fopen(wavpath,"wb"); if(wavf) wav_head(wavf,0); else perror(wavpath); }
   retro_set_environment(env);
   retro_set_video_refresh(vid);
   retro_set_audio_sample_batch(aud);
@@ -140,6 +164,16 @@ int main(int argc,char**argv){
     }
   }
   printf("init %.1f ms   frames %ld   mean %.2f ms   max %.2f ms (frame %ld)\n",tinit,N,sum/N,mx,mxf);
+  printf("audio_frame  mean %.3f ms   max %.3f ms\n",aud_prof_n?aud_prof_sum/aud_prof_n:0.0,aud_prof_max);
+  if(wavf){
+    fseek(wavf,0,SEEK_SET); wav_head(wavf,(uint32_t)wav_frames); fclose(wavf);
+    for(int c=0;c<2;c++){
+      double n=wav_frames>0?(double)wav_frames:1.0, rms=sqrt(wav_sq[c]/n);
+      printf("wav %s  peak %5d (%6.2f dBFS)   rms %6.2f dBFS   dc %+.1f\n",c?"R":"L",wav_pk[c],
+        20*log10((wav_pk[c]+1e-9)/32768.0),20*log10((rms+1e-9)/32768.0),wav_sum[c]/n);
+    }
+    printf("wav %s  %.1f s   samples >= 32000: %ld\n",wavpath,wav_frames/(double)SRATE,wav_clip);
+  }
   retro_deinit();
   return 0;
 }
