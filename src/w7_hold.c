@@ -731,7 +731,11 @@ static void hold_ring(int cx,int cy,float r,uint32_t col,int a,int cy0,int cy1){
   for(int i=0;i<n;i++){
     float t=TAU*i/n;
     int x=cx+(int)(cosf(t)*r), y=cy+(int)(sinf(t)*r);
-    if(y<cy0||y>=cy1||y<clip_y0||y>=clip_y1) continue;
+    if(y<cy0||y>=cy1) continue;
+    /* each point also lights the pixel below it, so the band above this
+       one's first row still owes that row a pixel: take y = clip_y0-1
+       and let fb_blend's own clip keep what belongs to this band      */
+    if(y<clip_y0-1||y>=clip_y1) continue;
     fb_blend(x,y,col,a); fb_blend(x+1,y,col,a/2); fb_blend(x,y+1,col,a/2);
   }
 }

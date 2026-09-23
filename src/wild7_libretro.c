@@ -24,6 +24,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
+#include <time.h>
 #include "libretro.h"
 
 #define FBW 1280
@@ -37,10 +38,41 @@ static uint32_t fb[FBW*FBH];       /* what we hand to the frontend      */
 static uint32_t bg[FBW*FBH];       /* static cabinet art, memcpy'd in   */
 static int16_t  abuf[SPF*2];
 
+/*  Thread-local storage for the band renderer (src/w7_thread.c).  Old
+ *  Android API levels only have emulated TLS, a function call on every
+ *  access, and the clip is read per pixel: there the core is built
+ *  single-threaded instead.  -DW7_NOTHREADS forces that anywhere.     */
+#if defined(__ANDROID__) && defined(__ANDROID_API__) && !defined(W7_NOTHREADS)
+#  if __ANDROID_API__ < 29
+#    define W7_NOTHREADS 1
+#  endif
+#endif
+#ifdef W7_NOTHREADS
+#  define W7_TLS
+#else
+#  define W7_TLS __thread
+#endif
+
 /*  The rows the current render thread may write, [clip_y0, clip_y1).
- *  Single-threaded this is the whole frame; the band renderer narrows it
- *  per thread.  Any loop that writes fb[] directly must honour it.     */
-static int clip_y0 __attribute__((unused)) = 0, clip_y1 __attribute__((unused)) = FBH;
+ *  Single-threaded this is the whole frame; the band renderer runs the
+ *  whole draw list once per band with a narrower clip on each thread.
+ *  Every primitive enforces it.  Draw code that loops over rows itself
+ *  should narrow the loop with clip_rows() (so the work divides between
+ *  the threads) and anything that writes fb[] directly MUST.          */
+static W7_TLS int clip_y0 = 0, clip_y1 = FBH;
+
+/*  [y0,y1) narrowed to this band's rows; 0 when nothing is left.       */
+static inline int clip_rows(int*y0,int*y1){
+  if(*y0<clip_y0) *y0=clip_y0;
+  if(*y1>clip_y1) *y1=clip_y1;
+  return *y0<*y1;
+}
+/*  Does [y0,y1) touch this band at all?  For skipping a whole object. */
+static inline int rows_visible(int y0,int y1){ return y0<clip_y1 && y1>clip_y0; }
+/*  Is row y this band's?  (clip_y0 >= 0 and clip_y1 <= FBH always.)   */
+static inline int in_band(int y){ return (unsigned)(y-clip_y0) < (unsigned)(clip_y1-clip_y0); }
+
+#include "w7_thread.c"               /* the band renderer's worker pool */
 
 static retro_video_refresh_t      video_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
@@ -53,6 +85,7 @@ static retro_log_printf_t         log_cb;
 static int opt_sound    = 1;
 static int opt_limiter  = 1;   /* damp flashing for photosensitivity   */
 static int opt_turbo    = 0;   /* faster reel spins                    */
+static int opt_threads  = 0;   /* band renderer threads, 0 = auto       */
 
 /* ── test hooks ─────────────────────────────────
  *  Off unless the matching environment variable is set, so they can
@@ -67,8 +100,13 @@ static int opt_turbo    = 0;   /* faster reel spins                    */
  *    WILD7_FORCE=mega|minor           force the jackpot roll to hit
  *    WILD7_FORCE=wheel                WHEEL on reels 2, 3 and 4
  *    WILD7_FORCE=storm                arm a 7 STRIKE on every base spin
+ *    WILD7_THREADS=1..4   override the wild7_threads option
+ *    WILD7_BANDS=N        cut the frame into N bands (tuning)
+ *    WILD7_PROFILE=1      every 300 frames, print mean / max update and
+ *                         render ms to stderr
  * ──────────────────────────────────────────── */
 static int dbg_pilot = 0, dbg_force = 0;
+static int dbg_threads = 0, dbg_bands = 0, dbg_profile = 0;
 static long dbg_frame = 0;
 
 /* ── rng ────────────────────────────────────────────────────────── */
@@ -373,31 +411,90 @@ static void cv_resolve(spr_t*s){
   }
 }
 
-/* ═══ FRAMEBUFFER OPS ══════════════════════════════════════════════ */
+/* ═══ FRAMEBUFFER OPS ══════════════════════════════════════════════
+ *  Every primitive clips to the band's rows up front, so a band pays
+ *  only for its own rows, and the row loops are plain spans the
+ *  compiler can vectorise.  The blend is the same integer formula
+ *  everywhere, which is what keeps every band bit-identical to the
+ *  single-threaded frame.
+ * ================================================================= */
+
+/*  One pixel of the fb_blend rule: a<=0 leaves it, a>=255 stores c,
+ *  otherwise each channel moves (c-d)*a/256 of the way, floored.      */
+/*
+ *  The blend is written  d + ((s-d)*a >> 8)  per channel throughout the
+ *  renderer.  Since d*256 + (s-d)*a == d*(256-a) + s*a and that is never
+ *  negative, it is exactly  (d*(256-a) + s*a) >> 8  - and in that form
+ *  red and blue ride together in one 32-bit multiply (each product fits
+ *  in its own 16 bits), so a pixel costs two multiplies instead of
+ *  three, with no unpacking.  Checked exhaustively for every d, s and
+ *  a in 0..256; the frames are bit-identical (tools/bandcheck.sh).    */
+static inline uint32_t blend_rbg(uint32_t d,uint32_t srb,uint32_t sg,uint32_t ia){
+  uint32_t rb=((d&0xFF00FFu)*ia + srb)>>8;
+  uint32_t g =((d&0x00FF00u)*ia + sg )>>8;
+  return (rb&0xFF00FFu)|(g&0x00FF00u);
+}
+static inline uint32_t blend_px(uint32_t d,uint32_t c,int a){
+  return blend_rbg(d,(c&0xFF00FFu)*(uint32_t)a,(c&0x00FF00u)*(uint32_t)a,256u-(uint32_t)a);
+}
+static inline void px_put(uint32_t*p,uint32_t c,int a){
+  if(a<=0) return;
+  *p = a>=255 ? c : blend_px(*p,c,a);
+}
+/*  The blend formula over a run, for any a in 1..256 (screen_tint uses
+ *  the formula even at 255; fb_blend stores instead - see span_put).  */
+static void span_blend(uint32_t*d,int n,uint32_t c,int a){
+  const uint32_t srb=(c&0xFF00FFu)*(uint32_t)a, sg=(c&0x00FF00u)*(uint32_t)a;
+  const uint32_t ia=256u-(uint32_t)a;
+  for(int i=0;i<n;i++) d[i]=blend_rbg(d[i],srb,sg,ia);
+}
+static void span_fill(uint32_t*d,int n,uint32_t c){ for(int i=0;i<n;i++) d[i]=c; }
+/*  fb_blend over a run.                                               */
+static inline void span_put(uint32_t*d,int n,uint32_t c,int a){
+  if(a<=0||n<=0) return;
+  if(a>=255) span_fill(d,n,c); else span_blend(d,n,c,a);
+}
+/*  fb_blend of one colour through an 8-bit coverage mask.  a==0 leaves
+ *  the pixel as it was either way, so there is no branch to skip it. */
+static void span_mask(uint32_t*d,const uint8_t*m,int n,uint32_t c){
+  const uint32_t crb=c&0xFF00FFu, cg=c&0x00FF00u;
+  for(int i=0;i<n;i++){
+    uint32_t a=m[i];
+    uint32_t o=blend_rbg(d[i],crb*a,cg*a,256u-a);
+    d[i] = a>=255 ? c : o;
+  }
+}
+
 static inline void fb_px(int x,int y,uint32_t c){
-  if((unsigned)x<FBW && (unsigned)y<FBH) fb[y*FBW+x]=c;
+  if((unsigned)x<FBW && in_band(y)) fb[y*FBW+x]=c;
 }
 static inline void fb_blend(int x,int y,uint32_t c,int a){
-  if((unsigned)x>=FBW || (unsigned)y>=FBH || a<=0) return;
+  if((unsigned)x>=FBW || !in_band(y) || a<=0) return;
   if(a>=255){ fb[y*FBW+x]=c; return; }
-  uint32_t d=fb[y*FBW+x];
-  int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
-  int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
-  fb[y*FBW+x] = RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
+  fb[y*FBW+x] = blend_px(fb[y*FBW+x],c,a);
 }
 static inline void fb_add(int x,int y,int r,int g,int b){
-  if((unsigned)x>=FBW || (unsigned)y>=FBH) return;
+  if((unsigned)x>=FBW || !in_band(y)) return;
   uint32_t d=fb[y*FBW+x];
   int dr=((d>>16)&255)+r, dg=((d>>8)&255)+g, db=(d&255)+b;
   fb[y*FBW+x] = RGB(dr>255?255:dr, dg>255?255:dg, db>255?255:db);
 }
 static void fb_rect(int x,int y,int w,int h,uint32_t c,int a){
-  for(int j=0;j<h;j++) for(int i=0;i<w;i++) fb_blend(x+i,y+j,c,a);
+  int x0=x<0?0:x, x1=x+w>FBW?FBW:x+w, y0=y, y1=y+h;
+  if(a<=0 || x0>=x1 || !clip_rows(&y0,&y1)) return;
+  for(int j=y0;j<y1;j++) span_put(fb+(size_t)j*FBW+x0,x1-x0,c,a);
 }
 static void fb_frame(int x,int y,int w,int h,int t,uint32_t c,int a){
+  if(!rows_visible(y,y+h)) return;
+  /* every blend here is the same colour and alpha, so the order the
+     strips go down in cannot change a pixel; only how often it is hit */
+  int j0=0, j1=h;
+  if(y+j0<clip_y0) j0=clip_y0-y;
+  if(y+j1>clip_y1) j1=clip_y1-y;
   for(int k=0;k<t;k++){
-    for(int i=0;i<w;i++){ fb_blend(x+i,y+k,c,a); fb_blend(x+i,y+h-1-k,c,a); }
-    for(int j=0;j<h;j++){ fb_blend(x+k,y+j,c,a); fb_blend(x+w-1-k,y+j,c,a); }
+    if(in_band(y+k))     for(int i=0;i<w;i++) fb_blend(x+i,y+k,c,a);
+    if(in_band(y+h-1-k)) for(int i=0;i<w;i++) fb_blend(x+i,y+h-1-k,c,a);
+    for(int j=j0;j<j1;j++){ fb_blend(x+k,y+j,c,a); fb_blend(x+w-1-k,y+j,c,a); }
   }
 }
 /* ── rounded rectangles ────────────────────────────────────────────
@@ -416,28 +513,45 @@ static inline float rr_sdf(float px,float py,float cx,float cy,
  *  the bounding box.  For a filled rect the straight middle band is
  *  simply solid, and for a frame it is two thin strips, so only the
  *  rounded ends need the field at all.  These are the most-called
- *  primitives in the renderer, so the saving shows up everywhere.     */
+ *  primitives in the renderer, so the saving shows up everywhere.
+ *  Rows outside the band and columns off screen are cut before the
+ *  loops; the field is only ever evaluated where it can land.         */
 static void fb_rrectg(int x,int y,int w,int h,float r,
                       uint32_t top,uint32_t bot,int alpha){
   if(w<=0||h<=0) return;
+  int j0=0, j1=h;
+  if(y+j0<clip_y0) j0=clip_y0-y;
+  if(y+j1>clip_y1) j1=clip_y1-y;
+  int i0=x<0?-x:0, i1=x+w>FBW?FBW-x:w;
+  if(j0>=j1 || i0>=i1) return;
   float cx=x+w*0.5f, cy=y+h*0.5f, hw=w*0.5f, hh=h*0.5f;
   int endband=(int)(r+2.0f);
   if(endband*2 > h) endband = h/2;
-  for(int j=0;j<h;j++){
+  /* the solid run of a straight-sided row is [2,w-2); the AA columns
+     are the rest: [0,2) and [max(2,w-2),w) */
+  int s0=i0>2?i0:2, s1=i1<w-2?i1:w-2;
+  int e0=i1<2?i1:2, e1=(w-2>2?w-2:2); if(e1<i0) e1=i0;
+  for(int j=j0;j<j1;j++){
     uint32_t col=mixc(top,bot,(float)j/(h>1?h-1:1));
+    uint32_t*row=fb+(size_t)(y+j)*FBW+x;
     if(j>=endband && j<h-endband){
       /* straight-sided row: solid, with the two edge pixels antialiased */
-      for(int i=0;i<w;i++){
-        if(i>1 && i<w-2){ fb_blend(x+i,y+j,col,alpha); continue; }
+      if(s0<s1) span_put(row+s0,s1-s0,col,alpha);
+      for(int i=i0;i<e0;i++){
         float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,hw,hh,r);
         float c=clampf(0.5f-d,0,1);
-        if(c>0.002f) fb_blend(x+i,y+j,col,(int)(c*alpha));
+        if(c>0.002f) px_put(row+i,col,(int)(c*alpha));
+      }
+      for(int i=e1;i<i1;i++){
+        float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,hw,hh,r);
+        float c=clampf(0.5f-d,0,1);
+        if(c>0.002f) px_put(row+i,col,(int)(c*alpha));
       }
     } else {
-      for(int i=0;i<w;i++){
+      for(int i=i0;i<i1;i++){
         float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,hw,hh,r);
         float c=clampf(0.5f-d,0,1);
-        if(c>0.002f) fb_blend(x+i,y+j,col,(int)(c*alpha));
+        if(c>0.002f) px_put(row+i,col,(int)(c*alpha));
       }
     }
   }
@@ -447,30 +561,50 @@ static void fb_rrect(int x,int y,int w,int h,float r,uint32_t c,int a){
 }
 static void fb_rframe(int x,int y,int w,int h,float r,float t,uint32_t col,int alpha){
   if(w<=0||h<=0) return;
+  int j0=0, j1=h;
+  if(y+j0<clip_y0) j0=clip_y0-y;
+  if(y+j1>clip_y1) j1=clip_y1-y;
+  int i0=x<0?-x:0, i1=x+w>FBW?FBW-x:w;
+  if(j0>=j1 || i0>=i1) return;
   float cx=x+w*0.5f, cy=y+h*0.5f, hw=w*0.5f, hh=h*0.5f;
   int endband=(int)(r+t+2.0f);
   int side   =(int)(t+2.5f);
   if(endband*2 > h) endband = h/2;
   if(side*2 > w)    side = w/2;
-  for(int j=0;j<h;j++){
+  /* a straight-sided row only has the two side strips [0,side) and
+     [w-side,w); the rows at the rounded ends are evaluated in full */
+  int a1=i1<side?i1:side, b0=(w-side>i0?w-side:i0);
+  if(b0<a1) b0=a1;
+  for(int j=j0;j<j1;j++){
+    uint32_t*row=fb+(size_t)(y+j)*FBW+x;
     int mid = (j>=endband && j<h-endband);
-    for(int i=0;i<w;i++){
-      if(mid && i>=side && i<w-side){ i = w-side-1; continue; }
-      float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,hw,hh,r);
-      float c=clampf(0.5f-fabsf(d+t*0.5f)+t*0.5f,0,1);
-      if(c>0.002f) fb_blend(x+i,y+j,col,(int)(c*alpha));
+    int n0=i0, n1=mid?a1:i1;
+    for(int pass=0;pass<2;pass++){
+      for(int i=n0;i<n1;i++){
+        float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,hw,hh,r);
+        float c=clampf(0.5f-fabsf(d+t*0.5f)+t*0.5f,0,1);
+        if(c>0.002f) px_put(row+i,col,(int)(c*alpha));
+      }
+      if(!mid) break;
+      n0=b0; n1=i1;
     }
   }
 }
 
 /* thick line, used for payline paths */
 static void fb_line(float x0,float y0,float x1,float y1,int t,uint32_t c,int a){
+  int h2=t/2;
+  float lo=y0<y1?y0:y1, hi=y0>y1?y0:y1;
+  if(!rows_visible((int)floorf(lo)-h2-2,(int)ceilf(hi)+h2+2)) return;
   float dx=x1-x0, dy=y1-y0;
   int n=(int)(sqrtf(dx*dx+dy*dy))+1;
   for(int i=0;i<=n;i++){
     float u=(float)i/n, px=x0+dx*u, py=y0+dy*u;
-    for(int j=-t/2;j<=t/2;j++) for(int k=-t/2;k<=t/2;k++)
-      if(j*j+k*k <= (t/2)*(t/2)+1) fb_blend((int)px+k,(int)py+j,c,a);
+    int iy=(int)py, ja=-h2, jb=h2;
+    if(iy+ja<clip_y0) ja=clip_y0-iy;
+    if(iy+jb>clip_y1-1) jb=clip_y1-1-iy;
+    for(int j=ja;j<=jb;j++) for(int k=-h2;k<=h2;k++)
+      if(j*j+k*k <= h2*h2+1) fb_blend((int)px+k,iy+j,c,a);
   }
 }
 
@@ -479,15 +613,16 @@ static void fb_line(float x0,float y0,float x1,float y1,int t,uint32_t c,int a){
    fully opaque pixels, which is most of a symbol's interior.            */
 static void blit(const spr_t*s,int dx,int dy,int cy0,int cy1,int alpha,uint32_t tint,float tintAmt){
   if(!s->px) return;
+  if(cy0<clip_y0) cy0=clip_y0;
+  if(cy1>clip_y1) cy1=clip_y1;
   int y0=0, y1=s->h;
   if(dy+y0 < cy0) y0 = cy0-dy;
   if(dy+y1 > cy1) y1 = cy1-dy;
   if(y0<0) y0=0;
   if(y1>s->h) y1=s->h;
-  int plain = (alpha>=255 && tintAmt<=0.0f);
+  int plain = (alpha==255 && tintAmt<=0.0f);
   for(int y=y0;y<y1;y++){
     int fy=dy+y;
-    if((unsigned)fy>=FBH) continue;
     int xa = s->rx0? s->rx0[y] : 0;
     int xb = s->rx1? s->rx1[y] : s->w-1;
     if(xb<xa) continue;
@@ -496,18 +631,25 @@ static void blit(const spr_t*s,int dx,int dy,int cy0,int cy1,int alpha,uint32_t 
     if(xb<xa) continue;
     const uint8_t*row = s->px + (size_t)y*s->w*4;
     uint32_t*dst = fb + (size_t)fy*FBW + dx;
+    if(plain){
+      /* the common case, branch-free so it vectorises: alpha 0 blends
+         to the pixel unchanged, alpha 255 stores the sprite colour */
+      for(int x=xa;x<=xb;x++){
+        const uint8_t*p=row+x*4;
+        uint32_t a=p[3], srb=((uint32_t)p[0]<<16)|p[2], sg=(uint32_t)p[1]<<8;
+        uint32_t o=blend_rbg(dst[x],srb*a,sg*a,256u-a);
+        dst[x] = a==255 ? (srb|sg) : o;
+      }
+      continue;
+    }
     for(int x=xa;x<=xb;x++){
       int a=row[x*4+3];
       if(!a) continue;
       uint32_t c = RGB(row[x*4],row[x*4+1],row[x*4+2]);
-      if(plain && a>=255){ dst[x]=c; continue; }
       if(tintAmt>0.0f) c = mixc(c,tint,tintAmt);
       int ea = a*alpha/255;
       if(ea>=255){ dst[x]=c; continue; }
-      uint32_t d=dst[x];
-      int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
-      int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
-      dst[x] = RGB(dr+((sr-dr)*ea>>8), dg+((sg-dg)*ea>>8), db+((sb-db)*ea>>8));
+      dst[x] = blend_px(dst[x],c,ea);
     }
   }
 }
@@ -518,16 +660,17 @@ static void blit(const spr_t*s,int dx,int dy,int cy0,int cy1,int alpha,uint32_t 
 static void blit_wash(const spr_t*s,int dx,int dy,int cy0,int cy1,
                       uint32_t col,float amt){
   if(!s->px||amt<=0.0f) return;
+  if(cy0<clip_y0) cy0=clip_y0;
+  if(cy1>clip_y1) cy1=clip_y1;
   int y0=0,y1=s->h;
   if(dy+y0<cy0) y0=cy0-dy;
   if(dy+y1>cy1) y1=cy1-dy;
   if(y0<0) y0=0;
   if(y1>s->h) y1=s->h;
-  int sr=(col>>16)&255, sg=(col>>8)&255, sb=col&255;
+  const int sr=(col>>16)&255, sg=(col>>8)&255, sb=col&255;
   int k=(int)(amt*256.0f);
   for(int y=y0;y<y1;y++){
     int fy=dy+y;
-    if((unsigned)fy>=FBH) continue;
     int xa = s->rx0? s->rx0[y] : 0;
     int xb = s->rx1? s->rx1[y] : s->w-1;
     if(xb<xa) continue;
@@ -536,9 +679,15 @@ static void blit_wash(const spr_t*s,int dx,int dy,int cy0,int cy1,
     if(xb<xa) continue;
     const uint8_t*row=s->px+(size_t)y*s->w*4;
     uint32_t*dst=fb+(size_t)fy*FBW+dx;
-    for(int x=xa;x<=xb;x++){
+    /* a==0 blends to the pixel unchanged, so no branch is needed */
+    if(k<=256){
+      const uint32_t crb=col&0xFF00FFu, cg=col&0x00FF00u;
+      for(int x=xa;x<=xb;x++){
+        uint32_t a=(uint32_t)(row[x*4+3]*k)>>8;           /* 0..255 */
+        dst[x]=blend_rbg(dst[x],crb*a,cg*a,256u-a);
+      }
+    } else for(int x=xa;x<=xb;x++){       /* amt > 1 overdrives: the plain form */
       int a=(row[x*4+3]*k)>>8;
-      if(a<=0) continue;
       uint32_t d=dst[x];
       int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
       dst[x]=RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
@@ -548,28 +697,40 @@ static void blit_wash(const spr_t*s,int dx,int dy,int cy0,int cy1,
 
 
 /* ── text (5x7 cell font, integer scale, with drop shadow) ──────── */
+/*  One glyph, each set cell a px-by-px block, clipped to the band and
+ *  the screen.  Shared by text() and the marquee's text_run().        */
+static void glyph_blocks(const uint8_t*gl,int gx,int gy,int px,uint32_t c){
+  for(int r=0;r<7;r++){
+    uint8_t bits=gl[r];
+    if(!bits) continue;
+    int ya=gy+r*px, yb=ya+px;
+    if(!clip_rows(&ya,&yb)) continue;
+    for(int cbit=0;cbit<5;cbit++){
+      if(!(bits & (0x10>>cbit))) continue;
+      int xa=gx+cbit*px, xb=xa+px;
+      if(xa<0) xa=0;
+      if(xb>FBW) xb=FBW;
+      if(xa>=xb) continue;
+      for(int yy=ya;yy<yb;yy++) span_fill(fb+(size_t)yy*FBW+xa,xb-xa,c);
+    }
+  }
+}
+static inline const uint8_t* glyph_of(int ch){
+  if(ch>='a'&&ch<='z') ch-=32;      /* font is upper case only */
+  if(ch<32||ch>127) ch='?';
+  return FONT[ch-32];
+}
 static void text(const char*s,int x,int y,int px,uint32_t col,int align,int shadow){
   int n=(int)strlen(s);
   while(px>1 && n*px*6-px > FBW-10) px--;      /* auto-fit */
+  if(!rows_visible(y, y+px*7+(shadow?px:0))) return;
   int adv=px*6, wtot=n*adv-px;
   int ox = align==1 ? x-wtot/2 : (align==2 ? x-wtot : x);
   for(int pass=(shadow?0:1); pass<2; pass++){
     uint32_t c = pass==0 ? 0x000000 : col;
     int off = pass==0 ? px : 0;
-    for(int i=0;i<n;i++){
-      int ch=(unsigned char)s[i];
-      if(ch>='a'&&ch<='z') ch-=32;      /* font is upper case only */
-      if(ch<32||ch>127) ch='?';
-      const uint8_t*gl = FONT[ch-32];
-      for(int r=0;r<7;r++){
-        uint8_t bits=gl[r];
-        for(int cbit=0;cbit<5;cbit++){
-          if(!(bits & (0x10>>cbit))) continue;
-          int gx = ox+i*adv+cbit*px+off, gy = y+r*px+off;
-          for(int j=0;j<px;j++) for(int k=0;k<px;k++) fb_px(gx+k,gy+j,c);
-        }
-      }
-    }
+    for(int i=0;i<n;i++)
+      glyph_blocks(glyph_of((unsigned char)s[i]),ox+i*adv+off,y+off,px,c);
   }
 }
 
@@ -721,46 +882,62 @@ static void tb_stamp(uint8_t*m,int mw,int mh,float cx,float cy,float r){
  *  neighbours, which for a big caption is hundreds of thousands of
  *  writes.  The result depends only on the string and the size, and the
  *  same few captions are drawn frame after frame, so the masks are
- *  cached and only the three composite passes run per frame.          */
-#define TBC 8
+ *  cached and only the three composite passes run per frame.
+ *
+ *  The band renderer calls textb() from every thread at once, so the
+ *  cache is shared under bp_lock: a lookup (or, on a miss, the
+ *  rasterise) happens under the lock, the entry is pinned, and the
+ *  composite runs unlocked.  Eviction never takes a pinned entry, and
+ *  each thread pins at most one, so TBC must stay above the thread
+ *  count - it is sized for a frame's worth of captions besides.       */
+#define TBC 16
 typedef struct {
   char     str[40];
-  int      px, bw, bh, pad, capH, used;
+  int      px, bw, bh, pad, capH, used, pins;
   uint8_t *fill, *out;
 } tbcache_t;
 static tbcache_t tbc[TBC];
 static int tbc_clock;
 
+/*  Mask geometry for a caption; textb() needs it before the cache.    */
+static void tb_geom(int px,int wtot,int capH,int*pad,int*bw,int*bh){
+  float Rin  = px*0.60f;
+  float Rout = Rin + (px*0.30f > 1.5f ? px*0.30f : 1.5f);
+  *pad=(int)(Rout+3.0f);
+  *bw=wtot+*pad*2; *bh=capH+*pad*2;
+  if(*bw>TBW) *bw=TBW;
+  if(*bh>TBH) *bh=TBH;
+}
+
+/*  Caller holds bp_lock (when bands run in parallel).                 */
 static tbcache_t* tb_render(const char*str,int px,int n,int adv,int wtot,int capH){
   for(int i=0;i<TBC;i++)
     if(tbc[i].used && tbc[i].px==px && !strcmp(tbc[i].str,str)){
       tbc[i].used=++tbc_clock;
       return &tbc[i];
     }
-  /* evict the least recently used slot */
-  int slot=0;
-  for(int i=1;i<TBC;i++) if(tbc[i].used < tbc[slot].used) slot=i;
+  /* evict the least recently used slot that no thread is drawing from */
+  int slot=-1;
+  for(int i=0;i<TBC;i++)
+    if(!tbc[i].pins && (slot<0 || tbc[i].used < tbc[slot].used)) slot=i;
+  if(slot<0) return NULL;
   tbcache_t*c=&tbc[slot];
 
   float Rin  = px*0.60f;
   float Rout = Rin + (px*0.30f > 1.5f ? px*0.30f : 1.5f);
-  int pad=(int)(Rout+3.0f);
-  int bw=wtot+pad*2, bh=capH+pad*2;
-  if(bw>TBW) bw=TBW;
-  if(bh>TBH) bh=TBH;
+  int pad,bw,bh;
+  tb_geom(px,wtot,capH,&pad,&bw,&bh);
 
   uint8_t*f=(uint8_t*)realloc(c->fill,(size_t)bw*bh);
+  if(f) c->fill=f;
   uint8_t*o=(uint8_t*)realloc(c->out ,(size_t)bw*bh);
-  if(!f||!o){ free(f); free(o); c->fill=c->out=NULL; c->used=0; return NULL; }
-  c->fill=f; c->out=o;
+  if(o) c->out=o;
+  if(!f||!o){ free(c->fill); free(c->out); c->fill=c->out=NULL; c->used=0; return NULL; }
   memset(c->fill,0,(size_t)bw*bh);
   memset(c->out ,0,(size_t)bw*bh);
 
   for(int i=0;i<n;i++){
-    int ch=(unsigned char)str[i];
-    if(ch>='a'&&ch<='z') ch-=32;
-    if(ch<32||ch>127) ch='?';
-    const uint8_t*gl=FONT[ch-32];
+    const uint8_t*gl=glyph_of((unsigned char)str[i]);
     #define SET(rr,cc) ((rr)>=0&&(rr)<7&&(cc)>=0&&(cc)<5 && (gl[rr]&(0x10>>(cc))))
     for(int r=0;r<7;r++) for(int cc2=0;cc2<5;cc2++){
       if(!SET(r,cc2)) continue;
@@ -786,6 +963,16 @@ static tbcache_t* tb_render(const char*str,int px,int n,int adv,int wtot,int cap
   return c;
 }
 
+/*  Rows [j0,j1) of a mask whose row 0 lands on screen row by, clipped
+ *  to the band; columns clipped to the screen.  Returns 0 if empty.   */
+static int tb_clip(int bx,int by,int bw,int bh,int*j0,int*j1,int*i0,int*i1){
+  *j0=0; *j1=bh;
+  if(by+*j0<clip_y0) *j0=clip_y0-by;
+  if(by+*j1>clip_y1) *j1=clip_y1-by;
+  *i0=bx<0?-bx:0; *i1=bx+bw>FBW?FBW-bx:bw;
+  return *j0<*j1 && *i0<*i1;
+}
+
 static void textb(const char*str,int x,int y,int px,
                   const uint32_t*st,int ns,int align){
   int n=(int)strlen(str);
@@ -801,30 +988,43 @@ static void textb(const char*str,int x,int y,int px,
   }
   int adv=px*6, wtot=n*adv-px, capH=px*7;
   int ox = align==1 ? x-wtot/2 : (align==2 ? x-wtot : x);
-
-  tbcache_t*c=tb_render(str,px,n,adv,wtot,capH);
-  if(!c) return;
-  int bw=c->bw, bh=c->bh, pad=c->pad;
+  int pad,bw,bh;
+  tb_geom(px,wtot,capH,&pad,&bw,&bh);
   int bx=ox-pad, by=y-pad;
   int so=(int)(px*0.34f); if(so<2) so=2;
+  if(!rows_visible(by,by+bh+so)) return;       /* not this band's rows */
 
-  for(int j=0;j<bh;j++) for(int i=0;i<bw;i++){
-    int a2=c->out[j*bw+i];
-    if(a2) fb_blend(bx+i+so,by+j+so,0x000000,a2*160/255);
-  }
-  for(int j=0;j<bh;j++) for(int i=0;i<bw;i++){
-    int a2=c->out[j*bw+i];
-    if(a2) fb_blend(bx+i,by+j,0x180C02,a2);
-  }
-  for(int j=0;j<bh;j++){
-    float t=clampf((float)(j-pad)/(float)(capH>1?capH-1:1),0,1);
-    uint32_t col=ramp(st,ns,t);
-    if(t<0.34f) col=mixc(col,0xFFFFFF,(0.34f-t)/0.34f*0.55f);
-    for(int i=0;i<bw;i++){
-      int a2=c->fill[j*bw+i];
-      if(a2) fb_blend(bx+i,by+j,col,a2);
+  if(bp_active) bp_lock();
+  tbcache_t*c=tb_render(str,px,n,adv,wtot,capH);
+  if(c) c->pins++;
+  if(bp_active) bp_unlock();
+  if(!c) return;
+
+  int j0,j1,i0,i1;
+  if(tb_clip(bx+so,by+so,bw,bh,&j0,&j1,&i0,&i1)){           /* shadow */
+    for(int j=j0;j<j1;j++){
+      const uint8_t*m=c->out+(size_t)j*bw;
+      uint32_t*d=fb+(size_t)(by+so+j)*FBW+bx+so;
+      for(int i=i0;i<i1;i++){
+        uint32_t a=(uint32_t)m[i]*160u/255u;             /* black, 0..160 */
+        d[i]=blend_rbg(d[i],0,0,256u-a);
+      }
     }
   }
+  if(tb_clip(bx,by,bw,bh,&j0,&j1,&i0,&i1)){
+    for(int j=j0;j<j1;j++)                                     /* outline */
+      span_mask(fb+(size_t)(by+j)*FBW+bx+i0,c->out+(size_t)j*bw+i0,i1-i0,0x180C02);
+    for(int j=j0;j<j1;j++){                                    /* body    */
+      float t=clampf((float)(j-pad)/(float)(capH>1?capH-1:1),0,1);
+      uint32_t col=ramp(st,ns,t);
+      if(t<0.34f) col=mixc(col,0xFFFFFF,(0.34f-t)/0.34f*0.55f);
+      span_mask(fb+(size_t)(by+j)*FBW+bx+i0,c->fill+(size_t)j*bw+i0,i1-i0,col);
+    }
+  }
+
+  if(bp_active) bp_lock();
+  c->pins--;
+  if(bp_active) bp_unlock();
 }
 
 /* ═══ SYMBOL ART ═══════════════════════════════════════════════════
@@ -3286,16 +3486,22 @@ static const uint8_t SEG7[10] = {
 static void seg_bar(float x,float y,float len,float th,int horiz,
                     float slant,float ybase,uint32_t c,int a){
   if(a<=0) return;
+  int iy=(int)y, j0=0, j1=horiz?(int)th:(int)len;     /* rows iy+j */
+  if(iy+j0<clip_y0) j0=clip_y0-iy;
+  if(iy+j1>clip_y1) j1=clip_y1-iy;
   if(horiz){
-    for(int j=0;j<(int)th;j++){
+    for(int j=j0;j<j1;j++){
       float dy = j-(th-1)*0.5f;
       float inset = fabsf(dy);
       float x0=x+inset, x1=x+len-inset;
       float sh = (ybase-(y+j))*slant;
-      for(int i=(int)x0;i<(int)x1;i++) fb_blend(i+(int)sh,(int)y+j,c,a);
+      int xa=(int)x0+(int)sh, xb=(int)x1+(int)sh;      /* one run per row */
+      if(xa<0) xa=0;
+      if(xb>FBW) xb=FBW;
+      if(xa<xb) span_put(fb+(size_t)(iy+j)*FBW+xa,xb-xa,c,a);
     }
   } else {
-    for(int j=0;j<(int)len;j++){
+    for(int j=j0;j<j1;j++){
       float dx0=0,dx1=th;
       float d=fminf((float)j,len-1-j);
       if(d<th*0.5f){ dx0=th*0.5f-d; dx1=th-dx0; }
@@ -3309,7 +3515,7 @@ static void seg_bar(float x,float y,float len,float th,int horiz,
 static void seg_digit(int d,float x,float y,float w,float h,float th,
                       uint32_t on,int aon){
   uint8_t m = (d>=0&&d<=9)? SEG7[d] : (d==10?0x7F:0x00);
-  if(!m) return;
+  if(!m || !rows_visible((int)y-1,(int)(y+h)+3)) return;    /* not this band */
   const float sl=0.10f, yb=y+h;
   float hl=w-th, vl=h*0.5f;
   if(m&0x01) seg_bar(x+th*0.5f, y,            hl,th,1,sl,yb,on,aon);        /* a */
@@ -3882,9 +4088,13 @@ static void free_titles(void){
 
 /* ═══ BACKGROUND (built once, then memcpy'd every frame) ═══════════ */
 static void vgrad(int x,int y,int w,int h,uint32_t top,uint32_t bot){
-  for(int j=0;j<h;j++){
+  int i0=x<0?0:x, i1=x+w>FBW?FBW:x+w, j0=0, j1=h;
+  if(y+j0<clip_y0) j0=clip_y0-y;
+  if(y+j1>clip_y1) j1=clip_y1-y;
+  if(i0>=i1) return;
+  for(int j=j0;j<j1;j++){
     uint32_t c=mixc(top,bot,(float)j/(h>1?h-1:1));
-    for(int i=0;i<w;i++) fb_px(x+i,y+j,c);
+    span_fill(fb+(size_t)(y+j)*FBW+i0,i1-i0,c);
   }
 }
 
@@ -4281,7 +4491,11 @@ static void build_bg(void){
 /* half-size blit, 2x2 box filtered — used by the paytable */
 static void blit_half(const spr_t*s,int dx,int dy){
   if(!s->px) return;
-  for(int y=0;y+1<s->h;y+=2) for(int x=0;x+1<s->w;x+=2){
+  /* source rows y, y+1 land on screen row dy+y/2: keep this band's */
+  int y0=0, y1=s->h-1;
+  if(y0<2*(clip_y0-dy)) y0=2*(clip_y0-dy);
+  if(y1>2*(clip_y1-dy)) y1=2*(clip_y1-dy);
+  for(int y=y0;y<y1;y+=2) for(int x=0;x+1<s->w;x+=2){
     int r=0,g=0,b=0,a=0;
     for(int j=0;j<2;j++) for(int i=0;i<2;i++){
       const uint8_t*p=s->px+((y+j)*s->w+(x+i))*4;
@@ -4770,7 +4984,7 @@ static void draw_meters(void){
   seg_num(shown,     RRX+RAILW-13, METY+2*METH+27,11, 12, 28, wc,       0x5A1008, 1);
 
   /* ── deck ───────────────────────────────────────────────────────── */
-  for(int i=0;i<NBTN;i++){
+  for(int i=0;i<NBTN;i++){               /* decays in render(), not here */
     if(btnFlash[i]<=0) continue;
     blit(&btnspr[i][1],BTNX[i]-4,BTNY-4,0,FBH,255,0,0.0f);
   }
@@ -4779,34 +4993,66 @@ static void draw_meters(void){
   spin_dome(SPINX,SPINY,SPINR,G.state==ST_SPIN,sp);
 }
 
-/*  Full-screen dim.  fb_rect would run the general per-pixel blend with
- *  its bounds checks over 900k pixels; this is the same result in a
- *  straight loop, and it is on screen whenever an overlay is up.      */
+/*  Full-screen tint (this band's rows of it).  fb_rect would run the
+ *  general per-pixel blend with its bounds checks over 900k pixels; this
+ *  is the same result as one straight run the compiler vectorises, and
+ *  it is on screen whenever an overlay is up.                         */
 static void screen_tint(uint32_t c,int a){
   if(a<=0) return;
   if(a>255) a=255;
-  int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
-  uint32_t*q=fb;
-  for(int i=FBW*FBH;i>0;i--,q++){
-    uint32_t d=*q;
-    int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
-    *q = RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
-  }
+  span_blend(fb+(size_t)clip_y0*FBW,(clip_y1-clip_y0)*FBW,c,a);
 }
 static void dim(int a){ screen_tint(0x000000,a); }
 
-/*  Cached full-screen backdrops.  Built on first use so a player who
- *  never opens the pay table never pays for it.                       */
-static uint32_t *ptbg = NULL, *bnbg = NULL;
-static uint32_t *ptimg[2] = {NULL,NULL}, *bnimg = NULL;
-static uint32_t bnkey = 0xFFFFFFFFu;
-static void bonus_invalidate(void){ bnkey=0xFFFFFFFFu; }
+/*  Cached full frames.  Built on first use so a player who never opens
+ *  the pay table never pays for it; each costs 3.6 MB, so keep them few.
+ *
+ *  frame_cache() draws `paint` - a function that paints the WHOLE frame
+ *  - and keeps the result under `key`; while the key holds it copies the
+ *  rows back instead.  It is band-aware: on a miss each band paints and
+ *  stores only its own rows, so the cache fills in parallel, and it only
+ *  becomes valid in render_commit(), once every band has run.  Nothing
+ *  is ever painted outside the band, so no thread waits on another.  */
+typedef struct {
+  uint32_t *px;
+  uint32_t  key, pendKey;
+  int       valid, pend, nomem;
+} fcache_t;
+#define NFCPEND 16
+static fcache_t *fc_pend[NFCPEND];
+static int       fc_npend;
 
-static void cache_backdrop(uint32_t**slot, void(*paint)(void)){
-  if(*slot){ memcpy(fb,*slot,(size_t)FBW*FBH*4); return; }
+static void frame_cache(fcache_t*c,uint32_t key,void(*paint)(void)){
+  size_t o=(size_t)clip_y0*FBW, n=(size_t)(clip_y1-clip_y0)*FBW;
+  if(c->valid && c->key==key && c->px){ memcpy(fb+o,c->px+o,n*4); return; }
   paint();
-  *slot=(uint32_t*)malloc((size_t)FBW*FBH*4);
-  if(*slot) memcpy(*slot,fb,(size_t)FBW*FBH*4);
+  if(bp_active) bp_lock();
+  if(!c->px && !c->nomem){
+    c->px=(uint32_t*)malloc((size_t)FBW*FBH*4);
+    if(!c->px) c->nomem=1;                 /* never retried mid-frame */
+  }
+  if(c->px && !c->pend && fc_npend<NFCPEND){
+    c->pend=1; c->pendKey=key; fc_pend[fc_npend++]=c;
+  }
+  int keep = c->px && c->pend && c->pendKey==key;
+  if(bp_active) bp_unlock();
+  if(keep) memcpy(c->px+o,fb+o,n*4);
+}
+/*  Serial, after every band: the caches the bands filled are complete. */
+static void render_commit(void){
+  for(int i=0;i<fc_npend;i++){
+    fcache_t*c=fc_pend[i];
+    c->valid=1; c->key=c->pendKey; c->pend=0;
+  }
+  fc_npend=0;
+}
+static void fcache_free(fcache_t*c){ free(c->px); memset(c,0,sizeof *c); }
+
+static fcache_t ptbg, bnbg, ptimg[2], bnimg;
+static void bonus_invalidate(void){ bnimg.valid=0; }
+
+static void cache_backdrop(fcache_t*slot, void(*paint)(void)){
+  frame_cache(slot,0,paint);
 }
 
 /* pay table rows: 13 symbols in two columns */
@@ -4923,11 +5169,7 @@ static void paint_features(void){
  *  once into a buffer, then blit it and draw only what animates.      */
 static void draw_paytable(void){
   int pg = G.ptPage&1;
-  if(!ptimg[pg]){
-    if(pg) paint_features(); else paint_paytable();
-    ptimg[pg]=(uint32_t*)malloc((size_t)FBW*FBH*4);
-    if(ptimg[pg]) memcpy(ptimg[pg],fb,(size_t)FBW*FBH*4);
-  } else memcpy(fb,ptimg[pg],(size_t)FBW*FBH*4);
+  cache_backdrop(&ptimg[pg], pg ? paint_features : paint_paytable);
   if(((int)(G.t*2.0f))&1)
     text(pg ? "SELECT = PAY TABLE          ANY OTHER BUTTON = BACK TO THE GAME"
             : "SELECT = FEATURES AND JACKPOTS          ANY OTHER BUTTON = BACK TO THE GAME",
@@ -5519,8 +5761,14 @@ static void paint_bonus_bg(void){
   banner_plate(FBW/2,FBH-30,560,34,0xC060FF);
 }
 
+/*  The stage behind the pick board, baked once in build_pick_assets(). */
+static uint32_t *pkStage;
+
 static void paint_bonus(void){
-  cache_backdrop(&bnbg,paint_bonus_bg);
+  if(pkStage){                           /* this band's rows of the stage */
+    int y0=0, y1=FBH; clip_rows(&y0,&y1);
+    if(y1>y0) memcpy(fb+(size_t)y0*FBW,pkStage+(size_t)y0*FBW,(size_t)(y1-y0)*FBW*4);
+  } else paint_bonus_bg();
   char b[48];
   /* collected, on an LED readout */
   seg_num(G.pickTotal,120+300-24,102,9,13,28,0xFFC040,0x3A2804,1);
@@ -5599,25 +5847,23 @@ static void blit_hsquash(const uint32_t*src,int sw,int sx,int sy,int w,int h,
 }
 
 static void draw_bonus(void){
-  uint32_t k=bonus_key();
-  if(!bnimg) bnimg=(uint32_t*)malloc((size_t)FBW*FBH*4);
-  if(!bnimg){ paint_bonus(); return; }
-  if(k!=bnkey){ paint_bonus(); memcpy(bnimg,fb,(size_t)FBW*FBH*4); bnkey=k; }
-  else memcpy(fb,bnimg,(size_t)FBW*FBH*4);
+  /* band-aware: this band's rows come from the cache, or are painted
+     and stored into it (see frame_cache) */
+  frame_cache(&bnimg,bonus_key(),paint_bonus);
 
   /* the panel just picked turns over */
   const float FLIP=0.42f;
-  if(flipIdx>=0 && G.pickT<FLIP+0.5f && bnbg){
+  if(flipIdx>=0 && G.pickT<FLIP+0.5f && pkStage && bnimg.px){
     int x,y; pk_tile_xy(flipIdx,&x,&y);
     float u=G.pickT/FLIP;
     if(u<1.0f){
       /* clear the panel's slot back to the stage */
       for(int j=0;j<PK_PH;j++){
         int yy=y+j; if(yy<clip_y0||yy>=clip_y1) continue;
-        memcpy(fb+(size_t)yy*FBW+x,bnbg+(size_t)yy*FBW+x,PK_PW*4);
+        memcpy(fb+(size_t)yy*FBW+x,pkStage+(size_t)yy*FBW+x,PK_PW*4);
       }
       if(u<0.5f) blit_hsquash(NULL,0,0,0,PK_PW,PK_PH,x,y,1.0f-u*2.0f,&tileSpr[TILE_CLOSED]);
-      else       blit_hsquash(bnimg,FBW,x,y,PK_PW,PK_PH,x,y,(u-0.5f)*2.0f,NULL);
+      else       blit_hsquash(bnimg.px,FBW,x,y,PK_PW,PK_PH,x,y,(u-0.5f)*2.0f,NULL);
     }
     /* a flash as it lands */
     float f=clampf(1.0f-(G.pickT-FLIP*0.5f)/0.5f,0,1);
@@ -5682,10 +5928,10 @@ static void build_pick_assets(void){
     paint_tile(100,100,k);
     grab_rr(&tileSpr[k],100,100,PK_PW,PK_PH,18.0f);
   }
-  if(!bnbg){
+  if(!pkStage){
     paint_bonus_bg();
-    bnbg=(uint32_t*)malloc(sizeof bg);
-    if(bnbg) memcpy(bnbg,fb,sizeof bg);
+    pkStage=(uint32_t*)malloc(sizeof bg);
+    if(pkStage) memcpy(pkStage,fb,sizeof bg);
   }
   memcpy(fb,save,sizeof bg);
   free(save);
@@ -5788,24 +6034,14 @@ static void art_update(void){
 /* fixed-size text with no auto-fit, glyphs off screen skipped: the ticker */
 static void text_run(const char*s,int x,int y,int px,uint32_t col,int shadow){
   int n=(int)strlen(s), adv=px*6;
+  if(!rows_visible(y, y+px*7+(shadow?px:0))) return;
   for(int pass=(shadow?0:1); pass<2; pass++){
     uint32_t c = pass==0 ? 0x000000 : col;
     int off = pass==0 ? px : 0;
     for(int i=0;i<n;i++){
       int gx0=x+i*adv;
       if(gx0+px*5<0 || gx0>=FBW) continue;
-      int ch=(unsigned char)s[i];
-      if(ch>='a'&&ch<='z') ch-=32;
-      if(ch<32||ch>127) ch='?';
-      const uint8_t*gl=FONT[ch-32];
-      for(int r=0;r<7;r++){
-        uint8_t bits=gl[r];
-        for(int cbit=0;cbit<5;cbit++){
-          if(!(bits&(0x10>>cbit))) continue;
-          int gx=gx0+cbit*px+off, gy=y+r*px+off;
-          for(int j=0;j<px;j++) for(int k=0;k<px;k++) fb_px(gx+k,gy+j,c);
-        }
-      }
+      glyph_blocks(glyph_of((unsigned char)s[i]),gx0+off,y+off,px,c);
     }
   }
 }
@@ -5971,6 +6207,7 @@ static void art_free(void){
   spr_free(&mqPlate); spr_free(&logoGlow);
   spr_free(&fireStrip);
   spr_free(&pickEmblem);
+  free(pkStage); pkStage=NULL;
   for(int k=0;k<NTILE;k++) spr_free(&tileSpr[k]);
   spr_free(&pkGlow);
   free(rayAng); free(rayFall); rayAng=rayFall=NULL;
@@ -5986,24 +6223,35 @@ static void art_free(void){
 #include "w7_wheel.c"
 #include "w7_extra.c"
 
-static void render(void){
-  /* The wheel scene covers every pixel, so the cabinet is not drawn
-     under it (~2.5 ms saved); wheel_draw() draws the particles itself. */
+/*  The draw list.  It runs once per band, on several threads at once,
+ *  each with its own clip rows (see src/w7_thread.c and the render
+ *  contract in DEVELOPING.md): nothing reachable from here may change
+ *  state, and the frame is only whole again after the bands join.     */
+static void draw_frame(void){
+  /* The wheel scene covers every pixel, so neither the cabinet nor the
+     backdrop copy is drawn under it (see render_band); wheel_draw()
+     draws the particles itself.  The pay table and the pick board
+     repaint every row from a cached frame (draw_overlays ->
+     draw_paytable / draw_bonus), so the cabinet under them would be
+     drawn only to be overwritten: skip it too.  If one of those screens
+     ever lets the cabinet show through, drop its state from the test. */
   if(G.state==ST_WHEEL) wheel_draw();
   else {
-    memcpy(fb,bg,sizeof fb);
-    draw_marquee();
-    if(G.state==ST_HOLD) hold_draw();     /* the bonus owns the reel window */
-    else {
-      draw_reels();
-      hold_draw_cells();                  /* coin values over landed coins  */
-      extra_draw_reels();                 /* 7 STRIKE over the reels        */
+    int opaque = (G.state==ST_PAYTABLE || G.state==ST_BONUS);
+    if(!opaque){
+      draw_marquee();
+      if(G.state==ST_HOLD) hold_draw();   /* the bonus owns the reel window */
+      else {
+        draw_reels();
+        hold_draw_cells();                /* coin values over landed coins  */
+        extra_draw_reels();               /* 7 STRIKE over the reels        */
+      }
+      draw_features();
+      draw_wins();
+      draw_parts();
+      fx_draw();                          /* world-layer effects            */
+      draw_meters();
     }
-    draw_features();
-    draw_wins();
-    draw_parts();
-    fx_draw();                            /* world-layer effects            */
-    draw_meters();
     draw_overlays();
   }
   if(G.state==ST_GAMBLE) gamble_draw();   /* full-screen feature scenes     */
@@ -6012,6 +6260,22 @@ static void render(void){
     float f=G.flash; if(opt_limiter && f>0.35f) f=0.35f;
     screen_tint(0xFFFFFF,(int)(f*110));
   }
+}
+
+/*  One band: the backdrop's rows, then the whole draw list clipped to
+ *  them.  The clip goes back to the full frame afterwards, so serial
+ *  code after the join (fx_post) sees all of it.                      */
+static void render_band(int y0,int y1){
+  clip_y0=y0; clip_y1=y1;
+  if(G.state!=ST_WHEEL)                   /* the wheel covers every pixel */
+    memcpy(fb+(size_t)y0*FBW,bg+(size_t)y0*FBW,(size_t)(y1-y0)*FBW*sizeof(uint32_t));
+  draw_frame();
+  clip_y0=0; clip_y1=FBH;
+}
+
+static void render(void){
+  bp_run(render_band);                    /* every band; 1 thread = 1 call  */
+  render_commit();                        /* caches the bands filled        */
   fx_post();                              /* whole-frame post pass (shake)  */
 }
 
@@ -6036,6 +6300,9 @@ void retro_init(void){
                   (!strcmp(e,"win")?3:(!strcmp(e,"mega")?4:
                   (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:
                   (!strcmp(e,"hold")?7:(!strcmp(e,"wheel")?8:(!strcmp(e,"storm")?9:0))))))));
+    if((e=getenv("WILD7_THREADS"))) dbg_threads=atoi(e);
+    if((e=getenv("WILD7_BANDS")))   dbg_bands=atoi(e);
+    if((e=getenv("WILD7_PROFILE"))) dbg_profile=atoi(e);
   }
   if(!assets_ready){
     build_strips();
@@ -6049,12 +6316,12 @@ void retro_init(void){
   reset_game();
 }
 void retro_deinit(void){
-  free(ptbg);  ptbg=NULL;
-  free(bnbg);  bnbg=NULL;
-  free(ptimg[0]); free(ptimg[1]); ptimg[0]=ptimg[1]=NULL;
+  bp_shutdown();                          /* join the band workers first */
+  fcache_free(&ptbg); fcache_free(&bnbg);
+  fcache_free(&ptimg[0]); fcache_free(&ptimg[1]);
+  fcache_free(&bnimg);
   for(int i=0;i<TBC;i++){ free(tbc[i].fill); free(tbc[i].out);
-                          tbc[i].fill=tbc[i].out=NULL; tbc[i].used=0; }
-  free(bnimg); bnimg=NULL;
+                          tbc[i].fill=tbc[i].out=NULL; tbc[i].used=0; tbc[i].pins=0; }
   for(int i=0;i<NSYM;i++){
     free(sym[i].px);   sym[i].px=NULL;  free(sym[i].rx0);  free(sym[i].rx1);  sym[i].rx0=sym[i].rx1=NULL;
     free(symb[i].px);  symb[i].px=NULL; free(symb[i].rx0); free(symb[i].rx1); symb[i].rx0=symb[i].rx1=NULL;
@@ -6091,6 +6358,7 @@ static const struct retro_variable VARS[] = {
   { "wild7_music",    "Music; on|off" },
   { "wild7_turbo",    "Turbo spin; off|on" },
   { "wild7_limiter",  "Flash limiter (photosensitivity); on|off" },
+  { "wild7_threads",  "Render threads (auto = CPU cores - 1, up to 3); auto|1|2|3|4" },
   { NULL, NULL }
 };
 static void check_vars(void){
@@ -6103,6 +6371,12 @@ static void check_vars(void){
   if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_turbo  = strcmp(v.value,"on")==0;
   v.key="wild7_limiter"; v.value=NULL;
   if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_limiter= strcmp(v.value,"off")!=0;
+  v.key="wild7_threads"; v.value=NULL;
+  opt_threads=0;                               /* auto */
+  if(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE,&v)&&v.value) opt_threads=atoi(v.value);
+  /* the pool is only ever rebuilt here, between frames */
+  bp_config(dbg_threads>0 ? dbg_threads : (opt_threads>0 ? opt_threads : bp_auto_threads()),
+            dbg_bands);
 }
 
 void retro_set_environment(retro_environment_t cb){
@@ -6171,12 +6445,36 @@ void retro_cheat_reset(void){}
 void retro_cheat_set(unsigned i,bool e,const char*c){ (void)i;(void)e;(void)c; }
 void retro_set_controller_port_device(unsigned p,unsigned d){ (void)p;(void)d; }
 
+/*  WILD7_PROFILE: the core's own frame timing, so a soak on the Pi can
+ *  see render cost apart from RetroArch's.  Off unless the env is set. */
+static double prof_ms(void){
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts);
+  return ts.tv_sec*1e3 + ts.tv_nsec*1e-6;
+}
+static void prof_frame(double upd,double ren){
+  static double us=0, um=0, rs=0, rm=0;
+  static long n=0, frame=0;
+  us+=upd; rs+=ren; if(upd>um) um=upd; if(ren>rm) rm=ren;
+  n++; frame++;
+  if(n<300) return;
+  fprintf(stderr,"[wild7] frames %ld-%ld  render mean %.2f max %.2f ms  "
+          "update mean %.3f max %.3f ms  threads %d bands %d  state %d\n",
+          frame-n,frame-1,rs/n,rm,us/n,um,bp_nthreads,bp_nbands,G.state);
+  us=um=rs=rm=0; n=0;
+}
+
 void retro_run(void){
   bool upd=false;
   if(environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE_UPDATE,&upd) && upd) check_vars();
   poll_input();
-  update();
-  render();
+  if(dbg_profile){
+    double t0=prof_ms(); update();
+    double t1=prof_ms(); render();
+    prof_frame(t1-t0,prof_ms()-t1);
+  } else {
+    update();
+    render();
+  }
   audio_frame();
   if(audio_batch_cb) audio_batch_cb(abuf,SPF);
   video_cb(fb,FBW,FBH,FBW*sizeof(uint32_t));
