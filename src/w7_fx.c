@@ -1742,7 +1742,11 @@ static void fx_wins_draw(void){
   float t=G.showT;
   float sc=t<0.12f?0.30f+0.26f*(t/0.12f):0.50f+0.06f*expf(-(t-0.12f)*8.0f)*cosf((t-0.12f)*30.0f);
   float rise=fminf(t,0.8f)*14.0f;
-  fx_number(G.winAmt[w],sx,sy-30.0f-rise,sc,255,t<0.12f?120:0);
+  /* what it actually pays: in free spins the meter multiplies every win,
+     so the pop shows the multiplied amount, matching the WIN meter and
+     the LAST WIN panel's sum */
+  long long amt=(long long)G.winAmt[w]*((G.inFree && G.fsMult>1)?G.fsMult:1);
+  fx_number(amt,sx,sy-30.0f-rise,sc,255,t<0.12f?120:0);
 }
 
 static void fx_slam_title(const fxspr_t*s,float cx,float cy,float p,float t,float breathe,
@@ -1875,4 +1879,24 @@ static void fx_multup_draw(void){
   if(p>0.10f && p<0.40f) fx_title_glow(s,cx,cy+20.0f,sc,0xFFB020,(int)(220*env*(1.0f-(p-0.10f)/0.30f)));
   if(p<0.16f) fx_title(s,cx,cy+20.0f,sc*1.25f,(int)(80*env),0,FX_NOSHINE);
   fx_title(s,cx,cy+20.0f,sc,(int)(255*env),(int)white,FX_NOSHINE);
+
+  /*  Say what just happened, in words: which way it moved and by how
+   *  much (two or three wild reels in one spin climb two or three
+   *  steps), what it multiplies, and that it will not come back down.
+   *  The plain text has no alpha, so it is up only while the envelope
+   *  is well open.                                                    */
+  if(u>0.10f && u<0.80f){
+    char b[80];
+    int from=clampi(G.multFrom,1,5), to=clampi(G.fsMult,1,5), up=to-from;
+    int py=(int)cy+104;
+    fb_rrect((int)cx-330,py-6,660,78,14,0x06020E,(int)(210*env));
+    fb_rframe((int)cx-330,py-6,660,78,14,2.0f,0xFFD24A,(int)(230*env));
+    if(up>1) snprintf(b,sizeof b,"%d WILD REELS:  X%d  >  X%d",up,from,to);
+    else     snprintf(b,sizeof b,"WILD REEL:  X%d  >  X%d",from,to);
+    text(b,(int)cx,py+2,3,0xFFE9A8,1,1);
+    if(to>=FS_MAXMULT) snprintf(b,sizeof b,"MAXIMUM!  EVERY WIN PAYS X%d UNTIL THE END",to);
+    else               snprintf(b,sizeof b,"THIS WIN AND EVERY WIN AFTER IT PAYS X%d",to);
+    text(b,(int)cx,py+30,2,0xFFFFFF,1,1);
+    text("THE MULTIPLIER NEVER GOES DOWN UNTIL THE FREE SPINS END",(int)cx,py+50,1,0xC8D2F0,1,1);
+  }
 }

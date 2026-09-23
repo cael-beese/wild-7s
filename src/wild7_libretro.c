@@ -4433,9 +4433,13 @@ static void paint_rails(void){
   /* how to win */
   { int h=GY+GH-HOWY;
     glass_rail(LRX,HOWY,RAILW,h,0x16203A,0x060A16,0,"HOW TO WIN",0xFFD98A);
-    static const char*HW[6]={"WINS READ LEFT TO RIGHT","3+ REELS, ONE EACH","STEP UP, DOWN OR ACROSS",
-                             "EVERY WILD 7 DOUBLES IT","3 STARS = FREE SPINS","3 CROWNS = PICK BONUS"};
-    for(int i=0;i<6;i++) text(HW[i],LRX+RAILW/2,HOWY+30+i*26,2,i==0?0xFFFFFF:0xC8D2F0,1,1); }
+    /* one line per way to win: the ways rule, the wild's own multiplier,
+       and the four symbol-started features (7 STRIKE and the GAMBLE
+       explain themselves when they happen) */
+    static const char*HW[6]={"WAYS PAY LEFT TO RIGHT","WILD 7 = X2 PER WILD","3 STARS = FREE SPINS",
+                             "3 CROWNS = PICK BONUS","6 COINS = HOLD & SPIN","3 WHEELS = THE WHEEL"};
+    static const uint32_t HC[6]={0xFFFFFF,0xFFC24A,0x9CF57A,0xE0A0FF,0xFFD86A,0xE070FF};
+    for(int i=0;i<6;i++) text(HW[i],LRX+RAILW/2,HOWY+30+i*26,2,HC[i],1,1); }
 
   /* ── right rail: meters ────────────────────────────────────────── */
   static const char*MN[3]={"CREDITS","BET","WIN"};
@@ -4448,7 +4452,7 @@ static void paint_rails(void){
   /* controls crib, wholly static */
   { glass_rail(RRX,CTLY,RAILW,CTLH,0x16203A,0x060A16,0,"CONTROLS",0xFFD98A);
     static const char*CK[6]={"START / A","L / R","X","Y","SELECT","B"};
-    static const char*CV[6]={"SPIN","BET","MAX BET","ADD CREDITS","PAYS","SLAM"};
+    static const char*CV[6]={"SPIN","BET","MAX / GAMBLE","ADD CREDITS","PAYS","SLAM"};
     for(int i=0;i<6;i++){
       int y=CTLY+30+i*23;
       text(CK[i],RRX+12,y,2,0x9FE8FF,0,1);
@@ -4870,8 +4874,19 @@ static void draw_features(void){
 
   /*  The meter is the loudest thing in the rail once it is live: the
    *  panel takes the colour of the tier, its rim breathes, and the
-   *  number pops up a size and drops back each time it climbs.        */
-  int m = G.inFree? G.fsMult : G.pickMult;
+   *  number pops up a size and drops back each time it climbs.
+   *
+   *  It only ever means something in two places - the free spins and
+   *  the pick round - so it shows which one is live, and outside them
+   *  it sits at X1 saying where it comes alive.  (It used to go on
+   *  showing a pick round's X2 all through the base game afterwards.)
+   *  The free-spins meter stays up through the FREE SPINS COMPLETE
+   *  screen, saying it resets, so the drop back to X1 is seen.        */
+  int fsLive = G.inFree || (G.state==ST_BONUSEND && G.banner==3) ||
+               G.state==ST_FSINTRO;
+  int pkLive = G.state==ST_BONUS || (G.state==ST_BONUSEND && G.banner==4);
+  int m = fsLive ? G.fsMult : (pkLive ? G.pickMult : 1);
+  if(G.state==ST_FSINTRO && !G.inFree) m=1;   /* a fresh feature starts at X1 */
   if(m<1) m=1;
   if(m>1){
     static const uint32_t MHI[4]={0x143A6A,0x0D3A18,0x4A3608,0x5A1030};
@@ -4890,25 +4905,67 @@ static void draw_features(void){
   float pop = G.multUp>0 ? G.multUp*0.55f : 0.0f;
   int px = 4 + (int)(pop*3.0f);
   const uint32_t *mg = m>=4?GOLDG:(m>1?ICEG:SILVERG);
-  textb(b,LRX+RAILW-67,FEATY+26-(px-4)*4,px,mg,m>=4?5:4,1);
+  int mcx = LRX+RAILW-67;
+  textb(b,mcx,FEATY+19-(px-4)*4,px,mg,m>=4?5:4,1);
 
-  /* last win: the featured cluster while a win shows, else the last total */
+  /*  The ladder: five lamps, X1 to X5, lit up to where the free-spins
+   *  meter stands, the top one breathing.  Up is a lamp coming on, the
+   *  reset at the end is the row going dark - both visible at a glance. */
+  { int lit = fsLive ? m : 0;
+    float br=0.55f+0.45f*sinf(G.t*6.0f);
+    if(opt_limiter) br=0.75f+br*0.25f;
+    for(int k=0;k<FS_MAXMULT && k<5;k++){
+      int lx=mcx-40+k*20, ly=FEATY+56;
+      uint32_t c = k<lit ? (k==lit-1 ? mixc(0xFFB020,0xFFFFFF,br*0.5f) : 0xFFC24A)
+                         : 0x2A2410;
+      for(int j=-5;j<=5;j++) for(int i=-5;i<=5;i++){
+        int d=i*i+j*j;
+        if(d>25) continue;
+        fb_blend(lx+i,ly+j, d>16 ? 0x000000 : c, d>16 ? 200 : 255);
+      }
+      if(k<lit) fb_blend(lx-1,ly-2,0xFFFFFF,200);          /* a glint on the lit ones */
+    }
+    const char*cap;
+    uint32_t cc=0xC8D2F0;
+    if(fsLive && G.state==ST_BONUSEND){ cap=(((int)(G.t*3.0f))&1)?"RESETS TO X1":""; cc=0xFF9A9A; }
+    else if(fsLive && m>=FS_MAXMULT)  { cap="MAXIMUM!";        cc=0xFFE9A8; }
+    else if(fsLive)                   { cap="WILD REEL = +1";  cc=0xBFFFB0; }
+    else if(pkLive)                   { cap="PICK BONUS";      cc=0xE0B0FF; }
+    else                                cap="IN FREE SPINS";
+    text(cap,mcx,FEATY+65,1,cc,1,1);
+  }
+
+  /* last win: the featured cluster while a win shows, else the last total.
+     It spells the sum out: ways, the wild boost, the free-spins meter,
+     then what it paid - so every multiplier in it is on the screen.   */
   int show = (G.state==ST_SHOWWIN && G.nWin>0);
   if(show){
     int w=G.showIdx;
     uint32_t c=WINCOL[w&7];
     rail_panel(RRX,LWY,RAILW,GY+GH-LWY,0x1B2038,0x070A16,c,"LAST WIN",0xFFFFFF);
     blit_half(&sym[G.winSym[w]],RRX+14,LWY+30);
-    text(SYMNAME[G.winSym[w]],RRX+76,LWY+34,2,0xFFFFFF,0,1);
+    text(SYMNAME[G.winSym[w]],RRX+76,LWY+30,2,0xFFFFFF,0,1);
     snprintf(b,sizeof b,"%d REELS  %d WAY%s",G.winCnt[w],G.winWays[w],G.winWays[w]==1?"":"S");
-    text(b,RRX+76,LWY+56,2,c,0,1);
+    text(b,RRX+76,LWY+50,2,c,0,1);
+    int ly=LWY+70;
+    float pl=0.6f+0.4f*sinf(G.t*8.0f);
     if(G.winWt[w]>G.winWays[w]){
-      float pl=0.6f+0.4f*sinf(G.t*8.0f);
-      snprintf(b,sizeof b,"WILD BOOST X%d",G.winWt[w]/G.winWays[w]);   /* its own line: it used to sit on top of the ways */
-      text(b,RRX+76,LWY+100,2,mixc(0xFFC24A,0xFFFFFF,pl*0.6f),0,1);
+      /* every wild doubles the paths through it; over several ways the
+         boost is the average, so say so when it is not a whole number */
+      int q=G.winWt[w]/G.winWays[w], r=G.winWt[w]%G.winWays[w];
+      if(r==0) snprintf(b,sizeof b,"WILDS  X%d",q);
+      else     snprintf(b,sizeof b,"WILDS  X%d.%d AVG",q,(r*10)/G.winWays[w]);
+      text(b,RRX+76,ly,2,mixc(0xFFC24A,0xFFFFFF,pl*0.6f),0,1);
+      ly+=20;
     }
-    snprintf(b,sizeof b,"PAYS %d",G.winAmt[w]);
-    text(b,RRX+76,LWY+78,2,0xFFE9A8,0,1);
+    long long fm = (G.inFree && G.fsMult>1) ? G.fsMult : 1;
+    if(fm>1){
+      snprintf(b,sizeof b,"FREE SPINS  X%lld",fm);
+      text(b,RRX+76,ly,2,mixc(0x7CFF6A,0xFFFFFF,pl*0.5f),0,1);
+      ly+=20;
+    }
+    snprintf(b,sizeof b,"PAYS %lld",(long long)G.winAmt[w]*fm);
+    text(b,RRX+76,ly,2,0xFFE9A8,0,1);
     if(G.nWin>1){
       snprintf(b,sizeof b,"%d OF %d",w+1,G.nWin);
       text(b,RRX+RAILW-12,LWY+8,1,0xC8D2F0,2,1);
@@ -5446,6 +5503,7 @@ static void draw_fsbar(void){
   snprintf(b,sizeof b,"X%d",m);
   text("MULTIPLIER",MQPX+MQPW+34,23,2,0xFFE9A8,0,1);
   textb(b,MQPX+MQPW+194,15,4,m>1?GOLDG:SILVERG,m>1?5:4,1);
+  if(m>=FS_MAXMULT) text("MAX",MQPX+MQPW+232,23,2,0xFFE9A8,0,1);
   char w[24]; commas(w,sizeof w,G.fsWon);
   snprintf(b,sizeof b,"WON %s",w);
   text(b,FBW-36,23,2,0xFFFFFF,2,1);
@@ -5470,9 +5528,11 @@ static void draw_fsintro(void){
   if(t>1.2f){
     int a=(int)(255*clampf((t-1.2f)*3.0f,0,1));
     banner_plate(FBW/2,512,900,40,0x5AE070);
-    text(G.inFree?"3 MORE FREE SPINS  -  THE MULTIPLIER KEEPS CLIMBING"
-                 :"EXPANDING WILDS  -  EVERY ONE CLIMBS THE MULTIPLIER, UP TO X5",
-         FBW/2,505,2,mixc(0x000000,0xE8FFE0,a/255.0f),1,1);
+    char msg[96];
+    if(G.inFree) snprintf(msg,sizeof msg,"%d MORE FREE SPINS  -  THE MULTIPLIER STAYS AT X%d AND KEEPS CLIMBING",
+                          FS_RETRIG,G.fsMult<1?1:G.fsMult);
+    else snprintf(msg,sizeof msg,"MULTIPLIER STARTS AT X1  -  EVERY WILD REEL ADDS +1, UP TO X%d",FS_MAXMULT);
+    text(msg,FBW/2,505,2,mixc(0x000000,0xE8FFE0,a/255.0f),1,1);
     char b[48]; snprintf(b,sizeof b,"%d SCATTERS",G.scatCount);
     text(b,FBW/2,556,3,0xFFE9A8,1,1);
   }
@@ -5508,6 +5568,15 @@ static void draw_bonusend(void){
     snprintf(b,sizeof b,"COLLECTED %s   X%d MULTIPLIER",a,G.pickMult>0?G.pickMult:1);
     banner_plate(FBW/2,480,700,40,0xC060FF);
     text(b,FBW/2,473,2,0xF4E0FF,1,1);
+  }
+  /* the free-spins meter goes back to X1 here: say where it got to */
+  if(fs && t>0.9f){
+    char b[80];
+    int m=G.fsMult<1?1:G.fsMult;
+    if(m>1) snprintf(b,sizeof b,"MULTIPLIER REACHED X%d  -  BACK TO X1 FOR THE BASE GAME",m);
+    else    snprintf(b,sizeof b,"THE MULTIPLIER STAYED AT X1 THIS TIME");
+    banner_plate(FBW/2,480,760,40,0x5AE070);
+    text(b,FBW/2,473,2,0xE8FFE0,1,1);
   }
   glint_rain(30,t,220);
 }
@@ -5746,7 +5815,7 @@ static void paint_bonus_bg(void){
     fb_moulding(PX[k]-2,78,PWd[k]+4,66,16,4.0f,1,255);
   }
   text("COLLECTED",PX[0]+PWd[0]/2,85,1,0xFFE9A8,1,1);
-  text("MULTIPLIER",PX[1]+PWd[1]/2,85,1,0xFFE9A8,1,1);
+  text("MULTIPLIER - TIMES ALL COLLECTED",PX[1]+PWd[1]/2,85,1,0xFFE9A8,1,1);
   text("STOPS",PX[2]+PWd[2]/2,85,1,0xFFE9A8,1,1);
   led_window(PX[0]+14,96,PWd[0]-28,40);
   fb_moulding(6,4,FBW-12,FBH-8,18,6.0f,1,255);
