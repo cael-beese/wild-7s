@@ -1748,18 +1748,18 @@ static void fx_wins_draw(void){
 static void fx_slam_title(const fxspr_t*s,float cx,float cy,float p,float t,float breathe,
                           uint32_t col,int glowA,float shine,const fxspr_t*old){
   float lim=opt_limiter?0.5f:1.0f, sc, white=0;
-  if(p<0.16f){ float u=p/0.16f; sc=2.1f-1.16f*u*u; }
+  if(p<0.16f){ float u=p/0.16f; sc=1.75f-0.81f*u*u; }
   else { float q=p-0.16f; sc=1.0f-0.07f*expf(-q*8.0f)*cosf(q*26.0f); }
   sc+=breathe*sinf(t*5.0f);
   if(p<0.36f) white=(1.0f-p/0.36f)*230.0f*lim;
   if(old && old->c && p<0.2f){
     float u=p/0.2f;
-    fx_title(old,cx,cy,1.0f+u*0.8f,(int)((1.0f-u)*200),0,FX_NOSHINE);
+    fx_title(old,cx,cy,1.0f+u*0.5f,(int)((1.0f-u)*200),0,FX_NOSHINE);
   }
   if(p>0.12f && p<0.45f) fx_title_glow(s,cx,cy,sc,col,(int)(glowA*(1.0f-(p-0.12f)/0.33f)));
   if(p<0.16f){
-    fx_title(s,cx,cy,sc*1.20f,70,0,FX_NOSHINE);
-    fx_title(s,cx,cy,sc*1.08f,120,0,FX_NOSHINE);
+    if(sc<1.45f) fx_title(s,cx,cy,sc*1.18f,70,0,FX_NOSHINE);
+    if(sc<1.60f) fx_title(s,cx,cy,sc*1.07f,120,0,FX_NOSHINE);
   }
   fx_title(s,cx,cy,sc,255,(int)white,shine);
 }
