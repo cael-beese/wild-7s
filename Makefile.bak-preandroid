@@ -1,0 +1,38 @@
+# =====================================================================
+#  WILD 7's — libretro core.  Builds on the Pi in a few seconds.
+#    make            -> wild7_libretro.so
+#    make clean
+# =====================================================================
+TARGET := wild7_libretro.so
+SRC    := src/wild7_libretro.c
+HDR    := src/libretro.h
+ARCH   := $(shell uname -m)
+
+CFLAGS  := -O3 -ffast-math -fno-math-errno -fPIC -Wall -Wextra -Isrc
+LDFLAGS := -shared -lm
+
+ifeq ($(ARCH),aarch64)
+  CFLAGS += -mcpu=native
+endif
+ifeq ($(ARCH),armv7l)
+  CFLAGS += -march=armv7-a -mfpu=neon-vfpv4 -mfloat-abi=hard
+endif
+ifeq ($(ARCH),armv6l)
+  CFLAGS += -march=armv6zk -mfpu=vfp -mfloat-abi=hard
+endif
+
+.PHONY: all clean
+all: $(TARGET)
+
+$(HDR):
+	@echo "fetching libretro.h ..."
+	@curl -sfL -o $(HDR) \
+	  https://raw.githubusercontent.com/libretro/libretro-common/master/include/libretro.h \
+	  || (echo "download failed — copy libretro.h into src/ by hand"; exit 1)
+
+$(TARGET): $(SRC) $(HDR)
+	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
+	@echo "built $@ for $(ARCH)"
+
+clean:
+	rm -f $(TARGET)

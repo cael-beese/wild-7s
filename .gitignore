@@ -1,0 +1,6 @@
+*.so
+*.o
+w7sim
+w7shot
+/build/
+/out/
