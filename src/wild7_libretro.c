@@ -979,11 +979,15 @@ static int m_bbox(const uint8_t*m,int*x0,int*y0,int*x1,int*y1){
   int a=CANW,b=CANH,c=-1,d=-1;
   for(int y=0;y<CANH;y++){
     const uint8_t*row=m+y*CANW;
-    for(int x=0;x<CANW;x++) if(row[x]){
-      if(x<a) a=x;
-      if(x>c) c=x;
-      if(y<b) b=y;
-      d=y;
+    for(int w8=0;w8<CANW;w8+=8){
+      uint64_t v; memcpy(&v,row+w8,8);
+      if(!v) continue;
+      for(int x=w8;x<w8+8;x++) if(row[x]){
+        if(x<a) a=x;
+        if(x>c) c=x;
+        if(y<b) b=y;
+        d=y;
+      }
     }
   }
   if(c<0) return 0;
@@ -1063,6 +1067,19 @@ static void cv_fill_mask_at(const uint8_t*m,int ox,int oy,uint32_t col,int alpha
       cv_px(x+ox,ty,col,a*alpha/255);
     }
   }
+}
+
+/*  atan2 to within a few thousandths of a radian, several times faster
+ *  than libm's: the fans, rays and foils call it for every pixel.     */
+static inline float fast_atan2(float y,float x){
+  float ax=fabsf(x), ay=fabsf(y);
+  float mx=ax>ay?ax:ay, mn=ax>ay?ay:ax;
+  if(mx<1e-12f) return 0.0f;
+  float a=mn/mx, q=a*a;
+  float r=((-0.0464964749f*q+0.15931422f)*q-0.327622764f)*q*a+a;
+  if(ay>ax) r=1.57079637f-r;
+  if(x<0) r=3.14159274f-r;
+  return y<0?-r:r;
 }
 
 /* ── value noise, for fire, peel and grain ───────────────────────── */
@@ -1545,7 +1562,7 @@ static void cv_rays(float cx,float cy,float r0,float r1,int n,float rot,uint32_t
   for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
     float dx=x+0.5f-cx, dy=y+0.5f-cy, r=sqrtf(dx*dx+dy*dy);
     if(r>r1||r<1.0f) continue;
-    float a=atan2f(dy,dx)*n/TAU+rot;
+    float a=fast_atan2(dy,dx)*n/TAU+rot;
     float f=a-floorf(a);
     float ray=smooth01(0.30f,0.5f,f)*(1.0f-smooth01(0.5f,0.70f,f));
     float fall=clampf((r-r0)/(r1-r0),0,1);
@@ -1866,11 +1883,11 @@ static void cv_holo(float cx,float cy,float r,int alpha){
   for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
     float dx=x+0.5f-cx, dy=y+0.5f-cy, d=sqrtf(dx*dx+dy*dy);
     if(d>r) continue;
-    float h=atan2f(dy,dx)/TAU+0.5f+d/r*0.35f;
+    float h=fast_atan2(dy,dx)/TAU+0.5f+d/r*0.35f;
     h-=floorf(h);
     float f=h*7.0f; int i=(int)f; if(i>6) i=6;
     uint32_t c=mixc(hue[i],hue[(i+1)%7],f-i);
-    float band=0.55f+0.45f*sinf(d/r*14.0f+atan2f(dy,dx)*2.0f);
+    float band=0.55f+0.45f*sinf(d/r*14.0f+fast_atan2(dy,dx)*2.0f);
     cv_px(x,y,c,(int)(alpha*band));
   }
 }
@@ -3701,7 +3718,7 @@ static void box_blur_f(float*f,float*tmp,int W,int H,int r,int passes){
 }
 
 static void bake_title(spr_t*o,const char*s,int px,const tstyle_t*ts){
-  const int K=2;                                  /* supersample */
+  const int K=px>=8?1:2;              /* supersample the small ones only */
   int n=(int)strlen(s);
   float P=(float)(px*K);
   int pad=ts->glowR*K*2+(int)(P*1.3f)+6;
@@ -4033,7 +4050,7 @@ static void paint_backdrop(int theme){
   /* art-deco fan: rays from below the reel window */
   { float ox=FBW*0.5f, oy=FBH+120.0f;
     for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
-      float a=atan2f(y-oy,x-ox)*24.0f/TAU;
+      float a=fast_atan2(y-oy,x-ox)*24.0f/TAU;
       float f=a-floorf(a);
       float v=(f<0.5f?1.0f:0.0f)*0.035f*(1.0f-(float)y/FBH*0.3f);
       if(v>0) fb_add(x,y,(int)(v*(theme?120:170)),(int)(v*(theme?140:90)),(int)(v*(theme?90:200)));
@@ -4097,7 +4114,7 @@ static void paint_marquee_box(int theme){
   fb_rrectg(8,5,FBW-16,MQH-10,12,theme?0x0A2A5A:0x7A0A1E,theme?0x020816:0x1E0208,255);
   { float ox=FBW*0.5f, oy=MQH*0.5f;
     for(int y=6;y<MQH-6;y++) for(int x=10;x<FBW-10;x++){
-      float a=atan2f((y-oy)*6.0f,x-ox)*32.0f/TAU, f=a-floorf(a);
+      float a=fast_atan2((y-oy)*6.0f,x-ox)*32.0f/TAU, f=a-floorf(a);
       float dist=fabsf(x-ox)/(FBW*0.5f);
       float v=(f<0.5f?0.10f:0.0f)*(1.0f-dist)+0.20f*expf(-dist*dist*9.0f);
       if(v>0) fb_add(x,y,(int)(v*(theme?90:255)),(int)(v*(theme?150:90)),(int)(v*(theme?255:60)));
@@ -5047,7 +5064,7 @@ static void build_rays(void){
   if(!rayAng||!rayFall){ free(rayAng); free(rayFall); rayAng=rayFall=NULL; return; }
   for(int y=0;y<RAYH;y++) for(int x=0;x<RAYW;x++){
     float dx=(x-RAYW*0.5f+0.5f)*2.0f, dy=(y-RAYH*0.5f+0.5f)*2.0f;
-    float a=atan2f(dy,dx)/TAU+0.5f;
+    float a=fast_atan2(dy,dx)/TAU+0.5f;
     float d=sqrtf((dx/640.0f)*(dx/640.0f)+(dy/400.0f)*(dy/400.0f));
     float f=clampf(1.0f-d,0,1);
     f=f*smooth01(0.0f,0.12f,d);
@@ -5093,8 +5110,56 @@ static void draw_sunburst2(int cx,int cy,float rot,int nrays,uint32_t col,int k,
     }
   }
 }
-static void draw_sunburst(int cx,int cy,float rot,int nrays,uint32_t col,int k){
+static __attribute__((unused)) void draw_sunburst(int cx,int cy,float rot,int nrays,uint32_t col,int k){
   draw_sunburst2(cx,cy,rot,nrays,col,k,0,1,0,0);
+}
+
+/*  The banner screens dim the game and throw a sunburst over it.  Done
+ *  as two passes that is two read-modify-writes of most of a megapixel;
+ *  fused, it is one.  deep=0 keeps 3/8 of the scene, deep=1 keeps 9/32.
+ *  Everything below y0 (the marquee is spared) is touched.            */
+static void dim_burst(int y0,int deep,int cx,int cy,
+                      float rot,int nrays,uint32_t col,int k,
+                      float rot2,int nrays2,uint32_t col2,int k2){
+  /*  After the dim no channel is above 94, so the light added can be
+   *  capped at 161 and summed as one packed word, no per-channel clamp.
+   *  The light for every (falloff, angle) pair is tabulated per frame:
+   *  32 x 256 words, then each pixel is a shift, two loads and an add. */
+  uint32_t T[32][256];            /* per call, so bands never share it */
+  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+  int dr=(col2>>16)&255, dg=(col2>>8)&255, db=col2&255;
+  int r256=(int)(rot*256.0f), q256=(int)(rot2*256.0f);
+  int lit=(rayAng && (k>0||k2>0));
+  if(lit) for(int a=0;a<256;a++){
+    int p1=rayProf[(a*nrays+r256)&255]*k>>8, p2=k2>0?rayProf[(a*nrays2+q256)&255]*k2>>8:0;
+    for(int f=0;f<32;f++){
+      int v1=p1*f/31, v2=p2*f/31;
+      int ar=(cr*v1+dr*v2)>>8, ag=(cg*v1+dg*v2)>>8, ab=(cb*v1+db*v2)>>8;
+      if(ar>161) ar=161;
+      if(ag>161) ag=161;
+      if(ab>161) ab=161;
+      T[f][a]=RGB(ar,ag,ab);
+    }
+  }
+  const uint32_t m2=deep?0x070707:0x1F1F1F; const int s2=deep?5:3;
+  int ya=y0>clip_y0?y0:clip_y0;
+  for(int y=ya;y<clip_y1;y++){
+    uint32_t*q=fb+(size_t)y*FBW;
+    int yy=((y-cy+RAYH*2)>>1)-RAYH/2;
+    if(!lit||yy<0||yy>=RAYH){
+      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>2)&0x3F3F3F)+((c>>s2)&m2); }
+      continue;
+    }
+    const uint8_t*fa=rayFall+yy*RAYW, *aa=rayAng+yy*RAYW;
+    int xo=((0-cx+RAYW*2)>>1)-RAYW/2;
+    for(int x=0;x<FBW;x+=2){
+      int xx=xo+(x>>1);
+      uint32_t add = (xx>=0&&xx<RAYW) ? T[fa[xx]>>3][aa[xx]] : 0;
+      uint32_t c0=q[x], c1=q[x+1];
+      q[x]  =((c0>>2)&0x3F3F3F)+((c0>>s2)&m2)+add;
+      q[x+1]=((c1>>2)&0x3F3F3F)+((c1>>s2)&m2)+add;
+    }
+  }
 }
 
 /*  A neon tube round a panel, cheap enough to run live: a stepped
@@ -5151,9 +5216,10 @@ static void big_number(long long v,int cx,int cy,float sc){
 
 /* a lit plate for a line of text on a banner */
 static void banner_plate(int cx,int cy,int w,int h,uint32_t rim){
-  fb_rrectg(cx-w/2,cy-h/2,w,h,h/2,0x140818,0x04020A,225);
-  fb_rframe(cx-w/2,cy-h/2,w,h,h/2,2.0f,rim,255);
-  fb_rframe(cx-w/2+3,cy-h/2+3,w-6,h-6,h/2-3,1.0f,mixc(rim,0xFFFFFF,0.5f),110);
+  /* a modest radius keeps the rounded-rect primitives on their fast path */
+  fb_rrectg(cx-w/2,cy-h/2,w,h,10,0x140818,0x04020A,225);
+  fb_rframe(cx-w/2,cy-h/2,w,h,10,2.0f,rim,255);
+  fb_rframe(cx-w/2+3,cy-h/2+3,w-6,h-6,7,1.0f,mixc(rim,0xFFFFFF,0.5f),110);
 }
 
 /* glints drifting down through a banner: a hash of their index and the
@@ -5172,8 +5238,8 @@ static void draw_fsbar(void){
   char b[64];
   float pl=0.5f+0.5f*sinf(artT*4.0f);
   for(int sd=0;sd<2;sd++){
-    int x = sd ? MQPX+MQPW+14 : 14, w = MQPX-28, y=7, h=MQH-14;
-    fb_rrectg(x,y,w,h,12,0x06301A,0x010A04,240);
+    int x = sd ? MQPX+MQPW+4 : 10, w = MQPX-14, y=6, h=MQH-12;
+    fb_rrectg(x,y,w,h,12,0x06301A,0x010A04,255);
     fb_rframe(x,y,w,h,12,2.0f,mixc(0x5AE070,0xE8FFD8,pl*0.5f),255);
     fb_rframe(x+3,y+3,w-6,h-6,9,1.0f,0xFFD24A,150);
   }
@@ -5194,16 +5260,16 @@ static void draw_fsbar(void){
 /* ── FREE SPINS awarded ─────────────────────────────────────────── */
 static void draw_fsintro(void){
   float t=G.t;
-  dim_below(MQH,(int)(200*clampf(t*4.0f,0,1)));
-  draw_sunburst2(FBW/2,330,artT*0.08f,18,0x40FF60,opt_limiter?120:200,
+  if(t<0.2f) dim_below(MQH,(int)(200*t*5.0f));
+  else dim_burst(MQH,1,FBW/2,330,artT*0.08f,18,0x40FF60,opt_limiter?120:200,
                  -artT*0.05f,9,0xFFD040,opt_limiter?70:120);
   title_zoom(TT_FREESPINS,FBW/2,210,t,2.2f);
   /* the count rolls like a reel, then lands */
   int award = G.inFree ? FS_RETRIG : FS_AWARD;
   if(t>0.35f){
     float u=t-0.35f;
-    int n = u<0.8f ? (int)(dhash((int)(u*22.0f),7)*9.99f) : award;
-    float pop = u<0.8f ? 0.85f : 1.0f+0.35f*clampf(1.0f-(u-0.8f)*4.0f,0,1);
+    int n = u<0.4f ? (int)(dhash((int)(u*24.0f),7)*9.99f) : award;
+    float pop = u<0.4f ? 1.0f : 1.0f+0.35f*clampf(1.0f-(u-0.4f)*4.0f,0,1);
     if(G.inFree) blit_scaled(&bigPlus,FBW/2-70,392,0.8f*pop,255);
     big_number(n,FBW/2+(G.inFree?30:0),392,pop);
   }
@@ -5223,8 +5289,8 @@ static void draw_fsintro(void){
 static void draw_bonusend(void){
   float t=G.t;
   int fs=(G.banner==3);
-  dim_below(MQH,(int)(205*clampf(t*4.0f,0,1)));
-  draw_sunburst2(FBW/2,340,artT*0.07f,16,fs?0x60FF80:0xFFB020,opt_limiter?110:190,
+  if(t<0.2f) dim_below(MQH,(int)(205*t*5.0f));
+  else dim_burst(MQH,1,FBW/2,340,artT*0.07f,16,fs?0x60FF80:0xFFB020,opt_limiter?110:190,
                  -artT*0.05f,8,0xFFE070,opt_limiter?60:110);
   title_zoom(fs?TT_FSDONE:TT_BONUSDONE,FBW/2,190,t,2.4f);
   long long total = fs ? (long long)G.fsWon
@@ -5253,9 +5319,8 @@ static void draw_bonusend(void){
 }
 
 static void draw_broke(void){
-  dim_below(MQH,190);
   float pl=0.5f+0.5f*sinf(artT*3.0f);
-  draw_sunburst(FBW/2,300,artT*0.04f,12,0xFF3020,(int)(60+60*pl));
+  dim_burst(MQH,1,FBW/2,300,artT*0.04f,12,0xFF3020,(int)(60+60*pl),0,1,0,0);
   const spr_t*s=&title[TT_BROKE];
   blit(s,FBW/2-s->w/2,280-s->h/2,0,FBH,255,0,0.0f);
   if(((int)(artT*2.0f))&1){
@@ -5290,12 +5355,11 @@ static const char*FEATLINES[9]={
 
 static void draw_attract(void){
   float T=fmodf(artT,ATT_LOOP);
-  dim_below(MQH,165);
   char b[64];
   if(T<6.0f){
     /* the logo arrives, and the top prize under it */
-    draw_sunburst2(FBW/2,250,artT*0.06f,20,0xFFB030,opt_limiter?110:180,
-                   -artT*0.04f,10,0xFF4060,opt_limiter?60:100);
+    dim_burst(MQH,0,FBW/2,250,artT*0.06f,20,0xFFB030,opt_limiter?110:180,
+              -artT*0.04f,10,0xFF4060,opt_limiter?60:100);
     title_zoom(TT_LOGOBIG,FBW/2,215,T,1.6f);
     if(T>1.0f){
       int a=(int)(255*clampf((T-1.0f)*3.0f,0,1));
@@ -5312,7 +5376,7 @@ static void draw_attract(void){
     int i=(int)(u/(8.0f/7.0f)); if(i>6) i=6;
     float lt=u-i*(8.0f/7.0f);
     const show_t*sh=&SHOW[i];
-    draw_sunburst(FBW/2,250,artT*0.10f,16,sh->col,opt_limiter?120:200);
+    dim_burst(MQH,0,FBW/2,250,artT*0.10f,16,sh->col,opt_limiter?120:200,0,1,0,0);
     float z=2.3f*ease_back(lt*3.2f);
     if(lt>1.0f) z*=1.0f-(lt-1.0f)*4.0f;
     if(z>0.05f) blit_scaled(&sym[sh->sy],FBW/2,250,z,255);
@@ -5324,7 +5388,7 @@ static void draw_attract(void){
   } else if(T<17.5f){
     /* four progressives, lit like the sign on the rail */
     float u=T-14.0f;
-    draw_sunburst(FBW/2,300,artT*0.05f,24,0xC060FF,opt_limiter?90:150);
+    dim_burst(MQH,0,FBW/2,300,artT*0.05f,24,0xC060FF,opt_limiter?90:150,0,1,0,0);
     textb("4 PROGRESSIVE JACKPOTS",FBW/2,96,5,GOLDG,5,1);
     static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
     for(int k=0;k<NJP;k++){
@@ -5339,7 +5403,7 @@ static void draw_attract(void){
   } else {
     /* the whole game in nine lines */
     float u=T-17.5f;
-    draw_sunburst(FBW/2,330,artT*0.06f,18,0xFFB030,opt_limiter?80:130);
+    dim_burst(MQH,0,FBW/2,330,artT*0.06f,18,0xFFB030,opt_limiter?80:130,0,1,0,0);
     fb_shade_rect(GX-8,150,GW+16,356,0x05030C,150);
     fb_rframe(GX-8,150,GW+16,356,14,2.0f,0xFFD24A,200);
     textb("FEATURES",FBW/2,86,5,GOLDG,5,1);
@@ -5399,7 +5463,7 @@ static void paint_tile(int x,int y,int kind){
       if(q<0.9f||q2<0.9f) c=scalec(c,0.72f);
       else if(q<1.8f||q2<1.8f) c=mixc(c,0xFFFFFF,0.06f);
     } else {                                        /* a sunburst behind the prize */
-      float a=atan2f(j-h*0.5f,i-w*0.5f)*14.0f/TAU; a-=floorf(a);
+      float a=fast_atan2(j-h*0.5f,i-w*0.5f)*14.0f/TAU; a-=floorf(a);
       if(a<0.5f) c=mixc(c,0xFFFFFF,0.07f*lamp);
     }
     fb_blend(x+i,y+j,c,(int)(clampf(0.5f-d,0,1)*255));
@@ -5451,7 +5515,7 @@ static void paint_bonus_bg(void){
   }
   for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
     float dx=x-FBW*0.5f, dy=y-400.0f;
-    float a=atan2f(dy,dx)*28.0f/TAU; a-=floorf(a);
+    float a=fast_atan2(dy,dx)*28.0f/TAU; a-=floorf(a);
     float d=sqrtf(dx*dx/(700.0f*700.0f)+dy*dy/(460.0f*460.0f));
     float v=clampf(1.0f-d,0,1);
     float ray=(a<0.5f?1.0f:0.35f)*v*v*0.20f;
@@ -5595,7 +5659,7 @@ static void draw_bonus(void){
     if(G.pickT>FLIP*0.5f && f>0){
       int kind=G.pickKind[flipIdx];
       uint32_t fc = kind==PICK_STOP?0xFF3020:(kind==PICK_MULT?0x60FF80:0xFFD060);
-      for(int q=1;q<=10;q++) add_frame(x-q,y-q,PK_PW+2*q,PK_PH+2*q,fc,(int)((11-q)*22*f));
+      for(int q=0;q<6;q++) fb_rframe(x-2-q*3,y-2-q*3,PK_PW+4+q*6,PK_PH+4+q*6,20+q*3,3.0f,fc,(int)((230-q*38)*f));
       blit_add(&sparkspr,x-7,y-7,(int)(255*f)); blit_add(&sparkspr,x+PK_PW-7,y+PK_PH-7,(int)(255*f));
     }
   }
@@ -5866,8 +5930,10 @@ static void draw_marquee(void){
     }
   }
 
-  /* 2. the ticker, passing behind the sign */
+  /* 2. the ticker, passing behind the sign (free spins put their own
+     status bar over it, so it rests then) */
   char pot[24], tk[520];
+  if(!G.inFree){
   commas(pot,sizeof pot,jp_value(JP_ULT));
   snprintf(tk,sizeof tk,
     "  *  WAYS PAY - LEFT TO RIGHT, REEL TO REEL  *  EVERY WILD 7 DOUBLES THE WIN  *  "
@@ -5878,6 +5944,7 @@ static void draw_marquee(void){
   int off=(int)fmodf(mqT*110.0f,(float)tw);
   text_run(tk,20-off,   MQH/2-7,2,0xFFF4D0,1);
   text_run(tk,20-off+tw,MQH/2-7,2,0xFFF4D0,1);
+  }
 
   /* 3. the sign, its halo breathing, a shine crossing the logo */
   blit(&mqPlate,MQPX,MQPY,0,FBH,255,0,0.0f);
