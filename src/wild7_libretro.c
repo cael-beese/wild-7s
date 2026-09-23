@@ -275,8 +275,10 @@ static inline void cv_px(int x,int y,uint32_t col,int a){
   uint8_t*p = canvas + (y*CANW+x)*4;
   int sa = a>255?255:a;
   int r=(col>>16)&255, g=(col>>8)&255, b=col&255;
-  /* straight-alpha over */
   int da = p[3];
+  /* the common cases, opaque paint or an empty canvas, need no divides */
+  if(sa>=255 || da==0){ p[0]=(uint8_t)r; p[1]=(uint8_t)g; p[2]=(uint8_t)b; p[3]=(uint8_t)sa; return; }
+  /* straight-alpha over */
   int oa = sa + da*(255-sa)/255;
   if(oa<=0){ p[0]=p[1]=p[2]=p[3]=0; return; }
   p[0] = (uint8_t)((r*sa + p[0]*da*(255-sa)/255)/oa);
@@ -339,7 +341,7 @@ static void cv_rrect(float x,float y,float w,float h,float rad,uint32_t ctop,uin
   cv_poly(p,n,ctop,cbot,alpha);
 }
 /* stroke = fill a scaled-up copy underneath, then the real shape on top */
-static void cv_poly_outline(const pt_t*p,int n,float grow,uint32_t col,int alpha){
+static __attribute__((unused)) void cv_poly_outline(const pt_t*p,int n,float grow,uint32_t col,int alpha){
   pt_t q[64]; if(n>64) return;
   float cx=0,cy=0;
   for(int i=0;i<n;i++){ cx+=p[i].x; cy+=p[i].y; }
@@ -585,7 +587,7 @@ static uint32_t ramp(const uint32_t*st,int n,float t){
 }
 
 /* multi-stop vertical gradient polygon fill */
-static void cv_polyN(const pt_t*p,int n,const uint32_t*st,int ns,int alpha){
+static __attribute__((unused)) void cv_polyN(const pt_t*p,int n,const uint32_t*st,int ns,int alpha){
   if(n<3) return;
   float miny=p[0].y, maxy=p[0].y;
   for(int i=1;i<n;i++){ if(p[i].y<miny)miny=p[i].y; if(p[i].y>maxy)maxy=p[i].y; }
@@ -616,11 +618,11 @@ static void cv_polyN(const pt_t*p,int n,const uint32_t*st,int ns,int alpha){
 }
 
 /* a lit sphere: lambert from the upper left, plus a specular hot spot */
-static void cv_sphere(float cx,float cy,float r,uint32_t lo,uint32_t mid,uint32_t hi){
+static __attribute__((unused)) void cv_sphere(float cx,float cy,float r,uint32_t lo,uint32_t mid,uint32_t hi){
   int x0=(int)(cx-r-1), x1=(int)(cx+r+1);
   int y0=(int)(cy-r-1), y1=(int)(cy+r+1);
-  if(x0<0)x0=0; if(y0<0)y0=0;
-  if(x1>CANW)x1=CANW; if(y1>CANH)y1=CANH;
+  x0=x0<0?0:x0; y0=y0<0?0:y0;
+  x1=x1>CANW?CANW:x1; y1=y1>CANH?CANH:y1;
   for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
     float dx=(x+0.5f-cx)/r, dy=(y+0.5f-cy)/r;
     float d2=dx*dx+dy*dy;
@@ -642,12 +644,12 @@ static void cv_sphere(float cx,float cy,float r,uint32_t lo,uint32_t mid,uint32_
 }
 
 /* shaded ellipse, same lighting model */
-static void cv_ellipse_lit(float cx,float cy,float rx,float ry,
+static __attribute__((unused)) void cv_ellipse_lit(float cx,float cy,float rx,float ry,
                            uint32_t lo,uint32_t mid,uint32_t hi){
   int x0=(int)(cx-rx-1), x1=(int)(cx+rx+1);
   int y0=(int)(cy-ry-1), y1=(int)(cy+ry+1);
-  if(x0<0)x0=0; if(y0<0)y0=0;
-  if(x1>CANW)x1=CANW; if(y1>CANH)y1=CANH;
+  x0=x0<0?0:x0; y0=y0<0?0:y0;
+  x1=x1>CANW?CANW:x1; y1=y1>CANH?CANH:y1;
   for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
     float dx=(x+0.5f-cx)/rx, dy=(y+0.5f-cy)/ry;
     float d2=dx*dx+dy*dy;
@@ -828,8 +830,8 @@ static void textb(const char*str,int x,int y,int px,
 /* ═══ SYMBOL ART ═══════════════════════════════════════════════════
  *  All coordinates are in 0..92 design units; U() lifts them onto the
  *  supersampled canvas.  Every symbol is built the same way:
- *      dark outline  ->  bright rim  ->  gradient body  ->  highlight
- *  which is what keeps them readable against the dark reel window.
+ *      medallion  ->  art with a real surface  ->  glass over the top
+ *  and the whole thing is rasterised once, at init.
  * ================================================================= */
 #define U(v) ((float)(v)*(float)SS*((float)SYMW/SYMU))
 
@@ -872,318 +874,1078 @@ static const char*SYMNAME[NSYM] = {
   "SCATTER","CROWN","JACKPOT","ULTIMATE","LUCKY COIN","WHEEL"
 };
 
-/* ── the medallion ─────────────────────────────────────────────────
- *  Every symbol sits on a chrome-ringed, domed disc, the way the premium
- *  symbols on a modern cabinet do.  It is what turns a flat fruit into
- *  a game piece: the ring gives a hard, bright edge against the cream
- *  drum, the dome gives it depth, and the gloss arc sells the plastic.
- * ---------------------------------------------------------------- */
-static void cv_medal(uint32_t lo,uint32_t mid,uint32_t hi){
-  const float cx=U(46), cy=U(46);
-  cv_circle(cx+U(1.2f),cy+U(2.2f),U(45),0x000000,0x000000,120);   /* drop shadow */
-  static const uint32_t chrome[7]={0xFFFFFF,0xE4E9F4,0x7E88A2,0xF6F9FF,0xB6BDCC,0x59627A,0x2C3242};
-  pt_t p[48];
-  for(int i=0;i<48;i++){ float a=TAU*i/48.0f; p[i].x=cx+cosf(a)*U(44.5f); p[i].y=cy+sinf(a)*U(44.5f); }
-  cv_polyN(p,48,chrome,7,255);                                    /* chrome ring */
-  cv_circle(cx,cy,U(40.8f),0x1C2030,0x05060A,255);                /* bezel step  */
-  cv_ellipse_lit(cx,cy,U(38.6f),U(38.6f),lo,mid,hi);              /* domed disc  */
-  cv_ellipse(cx,cy-U(15),U(27),U(12),0xFFFFFF,0xFFFFFF,55);       /* gloss arc   */
+/* ═══ MATERIALS ════════════════════════════════════════════════════
+ *  A flat polygon with a gradient reads as clip art however good the
+ *  colours are.  These give any shape a surface instead: the shape is
+ *  rasterised into a coverage mask, the mask is blurred into a height
+ *  field, and the slope of the height field is a surface normal.  Light
+ *  that and the shape gets a rounded, bevelled edge; reflect a studio
+ *  environment in it and the bevel reads as polished gold or chrome.
+ *  Everything here runs once, at init, on the supersampled canvas.
+ * ================================================================= */
+#define CVN (CANW*CANH)
+static uint8_t cvm[CVN], cvm2[CVN], cvm3[CVN];   /* coverage masks     */
+static float   cvf[CVN], cvg[CVN], cvt[CVN];     /* fields and scratch */
+
+static void m_clear(uint8_t*m){ memset(m,0,CVN); }
+
+/* even-odd scanline fill into a mask */
+static void m_poly(uint8_t*m,const pt_t*p,int n){
+  if(n<3) return;
+  float miny=p[0].y, maxy=p[0].y;
+  for(int i=1;i<n;i++){ if(p[i].y<miny) miny=p[i].y; if(p[i].y>maxy) maxy=p[i].y; }
+  int y0=(int)floorf(miny), y1=(int)ceilf(maxy);
+  if(y0<0) y0=0;
+  if(y1>CANH) y1=CANH;
+  float xs[96];
+  for(int y=y0;y<y1;y++){
+    float fy=y+0.5f; int cnt=0;
+    for(int i=0,j=n-1;i<n;j=i++){
+      float ya=p[i].y, yb=p[j].y;
+      if((ya<=fy&&yb>fy)||(yb<=fy&&ya>fy)){
+        float t=(fy-ya)/(yb-ya);
+        if(cnt<96) xs[cnt++]=p[i].x+t*(p[j].x-p[i].x);
+      }
+    }
+    for(int a=0;a<cnt-1;a++) for(int b=a+1;b<cnt;b++)
+      if(xs[b]<xs[a]){ float t=xs[a]; xs[a]=xs[b]; xs[b]=t; }
+    for(int a=0;a+1<cnt;a+=2){
+      int xa=(int)ceilf(xs[a]-0.5f), xb=(int)ceilf(xs[a+1]-0.5f);
+      if(xa<0) xa=0;
+      if(xb>CANW) xb=CANW;
+      if(xb>xa) memset(m+y*CANW+xa,255,(size_t)(xb-xa));
+    }
+  }
+}
+static void m_ellipse(uint8_t*m,float cx,float cy,float rx,float ry){
+  int x0=(int)(cx-rx-1), x1=(int)(cx+rx+2), y0=(int)(cy-ry-1), y1=(int)(cy+ry+2);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=(x+0.5f-cx)/rx, dy=(y+0.5f-cy)/ry;
+    if(dx*dx+dy*dy<=1.0f) m[y*CANW+x]=255;
+  }
+}
+static __attribute__((unused)) void m_circle(uint8_t*m,float cx,float cy,float r){ m_ellipse(m,cx,cy,r,r); }
+static void m_rrect(uint8_t*m,float x,float y,float w,float h,float r){
+  int x0=(int)x, x1=(int)(x+w+1), y0=(int)y, y1=(int)(y+h+1);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  for(int yy=y0;yy<y1;yy++) for(int xx=x0;xx<x1;xx++)
+    if(rr_sdf(xx+0.5f,yy+0.5f,x+w*0.5f,y+h*0.5f,w*0.5f,h*0.5f,r)<=0.0f) m[yy*CANW+xx]=255;
+}
+/* a capsule, for stems and strokes */
+static __attribute__((unused)) void m_cap(uint8_t*m,float ax,float ay,float bx,float by,float r){
+  tb_cap(m,CANW,CANH,ax,ay,bx,by,r);
+}
+/*  Bubble lettering into a mask: the same stamped-disc strokes as the
+ *  display type, so the words on the symbols match the words on the
+ *  cabinet.  wt is the stroke radius as a fraction of the font pixel. */
+static void m_text(uint8_t*m,const char*s,float cx,float cy,float px,float wt){
+  int n=(int)strlen(s);
+  float adv=px*6.0f, wtot=n*adv-px;
+  float ox=cx-wtot*0.5f, oy=cy-px*3.5f, R=px*wt;
+  for(int i=0;i<n;i++){
+    int ch=(unsigned char)s[i];
+    if(ch>='a'&&ch<='z') ch-=32;
+    if(ch<32||ch>127) ch='?';
+    const uint8_t*gl=FONT[ch-32];
+    #define SETB(rr,cc) ((rr)>=0&&(rr)<7&&(cc)>=0&&(cc)<5 && (gl[rr]&(0x10>>(cc))))
+    for(int r=0;r<7;r++) for(int c=0;c<5;c++){
+      if(!SETB(r,c)) continue;
+      float x=ox+i*adv+c*px+px*0.5f, y=oy+r*px+px*0.5f;
+      tb_stamp(m,CANW,CANH,x,y,R);
+      static const int NB[4][2]={{0,1},{1,0},{1,1},{1,-1}};
+      for(int k=0;k<4;k++){
+        int nr=r+NB[k][0], nc=c+NB[k][1];
+        if(!SETB(nr,nc)) continue;
+        /* a diagonal weld only where the two cells are not already
+           joined orthogonally, or the letters clot at every corner */
+        if(NB[k][0]&&NB[k][1] && (SETB(r,nc)||SETB(nr,c))) continue;
+        tb_cap(m,CANW,CANH,x,y,ox+i*adv+nc*px+px*0.5f,oy+nr*px+px*0.5f,R);
+      }
+    }
+    #undef SETB
+  }
+}
+static void m_sub(uint8_t*m,const uint8_t*cut){
+  for(int i=0;i<CVN;i++) if(cut[i]) m[i]=(uint8_t)(m[i]*(255-cut[i])/255);
+}
+static void m_copy(uint8_t*d,const uint8_t*s){ memcpy(d,s,CVN); }
+
+static int m_bbox(const uint8_t*m,int*x0,int*y0,int*x1,int*y1){
+  int a=CANW,b=CANH,c=-1,d=-1;
+  for(int y=0;y<CANH;y++){
+    const uint8_t*row=m+y*CANW;
+    for(int w8=0;w8<CANW;w8+=8){
+      uint64_t v; memcpy(&v,row+w8,8);
+      if(!v) continue;
+      for(int x=w8;x<w8+8;x++) if(row[x]){
+        if(x<a) a=x;
+        if(x>c) c=x;
+        if(y<b) b=y;
+        d=y;
+      }
+    }
+  }
+  if(c<0) return 0;
+  *x0=a; *y0=b; *x1=c+1; *y1=d+1;
+  return 1;
 }
 
-/* the 7 glyph, authored on 8..84 x 8..89, placed scaled about (ox,oy) */
+/*  Box blur of a mask into a 0..1 field, `passes` times (two passes is
+ *  a tent, three is near enough a gaussian).  Only the shape's bounding
+ *  box, grown by the blur, is touched.  Returns 0 for an empty mask.  */
+static int f_blur(const uint8_t*m,float*out,int r,int passes,
+                  int*ox0,int*oy0,int*ox1,int*oy1){
+  int x0,y0,x1,y1;
+  if(!m_bbox(m,&x0,&y0,&x1,&y1)) return 0;
+  int g=r*passes+2;
+  x0-=g; y0-=g; x1+=g; y1+=g;
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++) out[y*CANW+x]=m[y*CANW+x]*(1.0f/255.0f);
+  float inv=1.0f/(2*r+1);
+  for(int p=0;p<passes && r>0;p++){
+    for(int y=y0;y<y1;y++){
+      const float*row=out+y*CANW; float*dst=cvt+y*CANW;
+      float acc=0;
+      for(int x=x0;x<=x0+r && x<x1;x++) acc+=row[x];
+      for(int x=x0;x<x1;x++){
+        dst[x]=acc*inv;
+        if(x+r+1<x1) acc+=row[x+r+1];
+        if(x-r>=x0)  acc-=row[x-r];
+      }
+    }
+    for(int x=x0;x<x1;x++){
+      float acc=0;
+      for(int y=y0;y<=y0+r && y<y1;y++) acc+=cvt[y*CANW+x];
+      for(int y=y0;y<y1;y++){
+        out[y*CANW+x]=acc*inv;
+        if(y+r+1<y1) acc+=cvt[(y+r+1)*CANW+x];
+        if(y-r>=y0)  acc-=cvt[(y-r)*CANW+x];
+      }
+    }
+  }
+  *ox0=x0; *oy0=y0; *ox1=x1; *oy1=y1;
+  return 1;
+}
+
+/*  Grow a shape by d canvas pixels: blur it and move the threshold out.
+ *  Corners come out rounded, which is what a stroked outline wants.   */
+static void m_dilate(const uint8_t*src,uint8_t*dst,float d){
+  int r=(int)d+2, x0,y0,x1,y1;
+  if(dst!=src) m_clear(dst);
+  if(!f_blur(src,cvg,r,1,&x0,&y0,&x1,&y1)) return;
+  float k=(float)(2*r+1);
+  float th=0.5f-d/k, w=0.6f/k;
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float v=(cvg[y*CANW+x]-(th-w))/(2.0f*w);
+    int a=(int)(clampf(v,0,1)*255.0f);
+    if(a>dst[y*CANW+x]) dst[y*CANW+x]=(uint8_t)a;
+  }
+}
+
+/* paint a mask in one colour, or a vertical gradient over its extent */
+static void cv_fill_mask(const uint8_t*m,uint32_t top,uint32_t bot,int alpha){
+  int x0,y0,x1,y1;
+  if(!m_bbox(m,&x0,&y0,&x1,&y1)) return;
+  for(int y=y0;y<y1;y++){
+    uint32_t c=mixc(top,bot,(float)(y-y0)/(float)(y1-y0>1?y1-y0-1:1));
+    for(int x=x0;x<x1;x++){ int a=m[y*CANW+x]; if(a) cv_px(x,y,c,a*alpha/255); }
+  }
+}
+static void cv_fill_mask_at(const uint8_t*m,int ox,int oy,uint32_t col,int alpha){
+  for(int y=0;y<CANH;y++){
+    int ty=y+oy; if(ty<0||ty>=CANH) continue;
+    for(int x=0;x<CANW;x++){
+      int a=m[y*CANW+x]; if(!a) continue;
+      cv_px(x+ox,ty,col,a*alpha/255);
+    }
+  }
+}
+
+/*  atan2 to within a few thousandths of a radian, several times faster
+ *  than libm's: the fans, rays and foils call it for every pixel.     */
+static inline float fast_atan2(float y,float x){
+  float ax=fabsf(x), ay=fabsf(y);
+  float mx=ax>ay?ax:ay, mn=ax>ay?ay:ax;
+  if(mx<1e-12f) return 0.0f;
+  float a=mn/mx, q=a*a;
+  float r=((-0.0464964749f*q+0.15931422f)*q-0.327622764f)*q*a+a;
+  if(ay>ax) r=1.57079637f-r;
+  if(x<0) r=3.14159274f-r;
+  return y<0?-r:r;
+}
+
+/* ── value noise, for fire, peel and grain ───────────────────────── */
+static float hash2(int x,int y,uint32_t s){
+  uint32_t h=(uint32_t)x*374761393u + (uint32_t)y*668265263u + s*2246822519u;
+  h=(h^(h>>13))*1274126177u; h^=h>>16;
+  return (float)(h&0xFFFFFF)/16777216.0f;
+}
+static float vnoise(float x,float y,uint32_t s){
+  int xi=(int)floorf(x), yi=(int)floorf(y);
+  float fx=x-xi, fy=y-yi;
+  fx=fx*fx*(3-2*fx); fy=fy*fy*(3-2*fy);
+  float a=hash2(xi,yi,s), b=hash2(xi+1,yi,s), c=hash2(xi,yi+1,s), d=hash2(xi+1,yi+1,s);
+  return lerpf(lerpf(a,b,fx),lerpf(c,d,fx),fy);
+}
+static float fbm(float x,float y,uint32_t s,int oct){
+  float v=0, a=0.5f, tot=0;
+  for(int i=0;i<oct;i++){ v+=vnoise(x,y,s+i*101u)*a; tot+=a; x*=2.03f; y*=2.03f; a*=0.5f; }
+  return v/tot;
+}
+static float smooth01(float e0,float e1,float x){
+  float t=clampf((x-e0)/(e1-e0),0,1); return t*t*(3-2*t);
+}
+
+/*  A studio environment for metal to reflect: bright softbox sky, a
+ *  hard dark horizon, warm floor.  Indexed by how far the reflected ray
+ *  points up.  The hard horizon is what makes chrome read as chrome.  */
+static uint32_t env_map(float up,int kind){
+  static const float    E[8] ={-1.0f,-0.50f,-0.14f,-0.02f,0.03f,0.30f,0.70f,1.0f};
+  static const uint32_t CHR[8]={0x8E8274,0x4E4640,0x24262E,0x101216,0xDCE6F8,0x9EB0CE,0xE4ECFA,0xFFFFFF};
+  static const uint32_t GLD[8]={0xB47C1C,0x7A4C0A,0x3E2204,0x1E0E02,0xFFF2BC,0xD89E28,0xFFDC80,0xFFFAE6};
+  static const uint32_t PLT[8]={0x7A8AA8,0x3A4460,0x1C2236,0x0C0E18,0xE8F4FF,0xA8C4F0,0xF0F6FF,0xFFFFFF};
+  const uint32_t*t = kind==1?GLD:(kind==2?PLT:CHR);
+  if(up<=E[0]) return t[0];
+  for(int i=0;i<7;i++) if(up<=E[i+1]) return mixc(t[i],t[i+1],(up-E[i])/(E[i+1]-E[i]));
+  return t[7];
+}
+
+/*  How far a reflected ray points up, for a surface normal n seen head
+ *  on.  A little of the sideways component is folded in, so a face
+ *  turned toward the key light (up and left) sees the bright sky and
+ *  vertical edges do not all land on the dark horizon.               */
+/* x to a whole power by squaring: the specular terms, a lot cheaper
+   than powf at a few million pixels per symbol sheet */
+static inline float ipow(float x,int n){
+  float r=1.0f;
+  while(n){ if(n&1) r*=x; x*=x; n>>=1; }
+  return r;
+}
+static inline float env_up(float nx,float ny,float nz){
+  return -2.0f*nz*(ny*0.85f+nx*0.40f);
+}
+
+typedef struct {
+  const uint32_t*ramp; int nr;  /* face colour, top to bottom (or across)  */
+  float bevel;                  /* width of the rounded edge, design units */
+  float metal;                  /* 0 lacquer .. 1 mirror                    */
+  int   env;                    /* 0 chrome, 1 gold, 2 platinum             */
+  float spec, shin;             /* specular strength and tightness          */
+  uint32_t glow; float glowAmt, glowR;  /* hot core, design units           */
+  int   horiz;                  /* ramp runs across (a turned surface)      */
+  float relief;                 /* 1 raised, negative engraved              */
+} mat_t;
+
+/* the key light: up and to the left, the way every symbol is lit */
+#define LX (-0.50f)
+#define LY (-0.68f)
+#define LZ ( 0.54f)
+
+static void cv_shade(const uint8_t*m,const mat_t*mt,int alpha){
+  int r=(int)(U(mt->bevel)*0.30f); if(r<1) r=1;
+  int x0,y0,x1,y1;
+  if(!f_blur(m,cvf,r,2,&x0,&y0,&x1,&y1)) return;
+  if(mt->glowAmt>0.0f){
+    int gx0,gy0,gx1,gy1, gr=(int)(U(mt->glowR)*0.5f); if(gr<1) gr=1;
+    f_blur(m,cvg,gr,2,&gx0,&gy0,&gx1,&gy1);
+  }
+  int bx0=0,by0=0,bx1=0,by1=0;
+  m_bbox(m,&bx0,&by0,&bx1,&by1);
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  float hx=lx, hy=ly, hz=lz+1.0f, hl=sqrtf(hx*hx+hy*hy+hz*hz);
+  hx/=hl; hy/=hl; hz/=hl;
+  float S=(mt->relief!=0.0f?mt->relief:1.0f)*1.7f*(2*r+1);
+  float spec0=ipow(hz,(int)mt->shin);
+  for(int y=by0;y<by1;y++) for(int x=bx0;x<bx1;x++){
+    int a=m[y*CANW+x]; if(!a) continue;
+    int i=y*CANW+x;
+    float gx=(x+1<x1?cvf[i+1]:cvf[i])-(x-1>=x0?cvf[i-1]:cvf[i]);
+    float gy=(y+1<y1?cvf[i+CANW]:cvf[i])-(y-1>=y0?cvf[i-CANW]:cvf[i]);
+    float nx=-gx*0.5f*S, ny=-gy*0.5f*S, nz=1.0f;
+    float nl=sqrtf(nx*nx+ny*ny+1.0f); nx/=nl; ny/=nl; nz/=nl;
+    float t = mt->horiz ? (float)(x-bx0)/(float)(bx1-bx0) : (float)(y-by0)/(float)(by1-by0);
+    uint32_t c=ramp(mt->ramp,mt->nr,t);
+    float k=(nx*lx+ny*ly+nz*lz)-lz;
+    c = k>0 ? mixc(c,0xFFFFFF,clampf(k*0.85f,0,0.8f)) : scalec(c,clampf(1.0f+k*1.25f,0.15f,1));
+    if(mt->metal>0.0f){
+      float up=env_up(nx,ny,nz);          /* reflected ray, how far it points up */
+      float wm=mt->metal*clampf((1.0f-nz)*3.2f,0,1);
+      if(wm>0.0f) c=mixc(c,env_map(up,mt->env),wm);
+    }
+    if(mt->spec>0.0f){
+      float sd=nx*hx+ny*hy+nz*hz;
+      float sp=(sd>0?ipow(sd,(int)mt->shin):0)-spec0;
+      if(sp>0) c=mixc(c,0xFFFFFF,clampf(sp*mt->spec*3.0f,0,1));
+    }
+    if(mt->glowAmt>0.0f){
+      float g=smooth01(0.45f,1.0f,cvg[i]);
+      if(g>0) c=mixc(c,mt->glow,g*mt->glowAmt);
+    }
+    cv_px(x,y,c,a*alpha/255);
+  }
+}
+
+/* stock finishes */
+static const uint32_t GOLDFACE[6]={0xFFF6D0,0xFFE27A,0xEAAA22,0xB87412,0xF6C84A,0x8A5608};
+static const uint32_t GOLDTURN[7]={0x6A4206,0xE8B03A,0xFFF4C8,0xFFD560,0xC88C1C,0x8A5A0A,0x4A2E04};
+static const uint32_t CHROMEFACE[5]={0xFFFFFF,0xDDE4F2,0x8A96B0,0xE6ECF8,0x6A7490};
+
+static mat_t mat_gold(float bevel){
+  mat_t m={GOLDFACE,6,bevel,0.9f,1,0.9f,40.0f,0,0,0,0,1.0f}; return m;
+}
+static mat_t mat_candy(const uint32_t*ramp,int n,float bevel){
+  mat_t m={ramp,n,bevel,0.28f,0,1.0f,50.0f,0,0,0,0,1.0f}; return m;
+}
+
+/*  A four-point glint with a soft halo: the thing that makes a gem or a
+ *  polished edge look like it just caught the light.                  */
+static void cv_sparkle(float cx,float cy,float r,int alpha){
+  int x0=(int)(cx-r), x1=(int)(cx+r+1), y0=(int)(cy-r), y1=(int)(cy+r+1);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=(x+0.5f-cx)/r, dy=(y+0.5f-cy)/r, d=sqrtf(dx*dx+dy*dy);
+    if(d>=0.55f) continue;
+    float v=1.0f-d/0.55f; v=v*v*v;
+    cv_px(x,y,0xFFFFFF,(int)(v*alpha*0.8f));
+  }
+  pt_t h[4]={{cx-r,cy},{cx,cy-r*0.075f},{cx+r,cy},{cx,cy+r*0.075f}};
+  pt_t v[4]={{cx,cy-r},{cx+r*0.075f,cy},{cx,cy+r},{cx-r*0.075f,cy}};
+  cv_poly(h,4,0xFFFFFF,0xFFFFFF,alpha);
+  cv_poly(v,4,0xFFFFFF,0xFFFFFF,alpha);
+  float q=r*0.42f;
+  pt_t d1[4]={{cx-q,cy-q},{cx+q*0.06f,cy-q*0.06f},{cx+q,cy+q},{cx-q*0.06f,cy+q*0.06f}};
+  pt_t d2[4]={{cx+q,cy-q},{cx+q*0.06f,cy+q*0.06f},{cx-q,cy+q},{cx-q*0.06f,cy-q*0.06f}};
+  cv_poly(d1,4,0xFFFFFF,0xFFFFFF,alpha*2/3);
+  cv_poly(d2,4,0xFFFFFF,0xFFFFFF,alpha*2/3);
+}
+
+/*  Glossy fruit.  A lambert sphere reads as a ball; fruit needs the
+ *  light to wrap past the terminator and pick up a saturated, warmer
+ *  colour there (the flesh under the skin), a cool rim bounced up from
+ *  the medallion, and a hard-edged window reflection rather than a
+ *  soft blob.  `tex` roughens the peel with noise in the normal.      */
+static void cv_fruit(float cx,float cy,float rx,float ry,
+                     uint32_t lo,uint32_t mid,uint32_t hi,uint32_t sss,
+                     float tex,float texf,uint32_t seed){
+  int x0=(int)(cx-rx-1), x1=(int)(cx+rx+2), y0=(int)(cy-ry-1), y1=(int)(cy+ry+2);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  float hx=lx, hy=ly, hz=lz+1.0f, hl=sqrtf(hx*hx+hy*hy+hz*hz);
+  hx/=hl; hy/=hl; hz/=hl;
+  uint32_t st[3]={lo,mid,hi};
+  uint32_t rim=mixc(hi,0x9AC4FF,0.55f);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=(x+0.5f-cx)/rx, dy=(y+0.5f-cy)/ry, d2=dx*dx+dy*dy;
+    if(d2>1.0f) continue;
+    float nz=sqrtf(1.0f-d2), nx=dx, ny=dy;
+    if(tex>0.0f){
+      float f=texf/(float)SS;
+      float e=0.8f;
+      float n0=fbm(x*f,y*f,seed,3), n1=fbm((x+e)*f,y*f,seed,3), n2=fbm(x*f,(y+e)*f,seed,3);
+      nx+=(n1-n0)*tex*60.0f; ny+=(n2-n0)*tex*60.0f;
+      float nl=sqrtf(nx*nx+ny*ny+nz*nz); nx/=nl; ny/=nl; nz/=nl;
+    }
+    float ndl=nx*lx+ny*ly+nz*lz;
+    float w=clampf((ndl+0.42f)/1.42f,0,1);
+    uint32_t c=ramp(st,3,w);
+    float term=1.0f-fabsf(ndl-0.08f)/0.32f;
+    if(term>0) c=mixc(c,sss,term*0.42f);
+    float fr=powf(1.0f-nz,2.2f)*clampf(0.25f+dx*0.55f+dy*0.75f,0,1);
+    c=mixc(c,rim,clampf(fr*0.85f,0,0.7f));
+    float ao=ipow(1.0f-nz,3)*clampf(0.3f+dy*0.7f,0,1);
+    c=scalec(c,1.0f-ao*0.35f);
+    float sd=nx*hx+ny*hy+nz*hz;
+    float sp=ipow(clampf(sd,0,1),90);
+    float win=smooth01(0.9935f,0.9965f,sd);               /* hard window  */
+    c=mixc(c,0xFFFFFF,clampf(sp*0.55f+win*0.85f,0,1));
+    float s2=ipow(clampf(nx*0.35f+ny*0.55f+nz*0.76f,0,1),30); /* bounce spec */
+    c=mixc(c,0xFFFFFF,s2*0.18f);
+    int a = d2>0.92f ? (int)(255*(1.0f-(d2-0.92f)/0.08f)) : 255;
+    cv_px(x,y,c,a);
+  }
+}
+
+/*  Fire: noise turbulence under a tongue-shaped envelope, run through a
+ *  black-body ramp.  `phase` scrolls the turbulence upward, so a few
+ *  phases baked side by side flicker when they are cycled.            */
+static void cv_fire(float ux0,float uy0,float ux1,float uy1,float phase,uint32_t seed,int alpha){
+  static const uint32_t FIRE[6]={0x5A0400,0xC01A04,0xFF5A0C,0xFFA41C,0xFFE070,0xFFFFE0};
+  int x0=(int)U(ux0), x1=(int)U(ux1), y0=(int)U(uy0), y1=(int)U(uy1);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  float W=(float)(x1-x0), H=(float)(y1-y0);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float u=(x-x0)/W, v=(y1-y)/H;                         /* v: 0 base, 1 top */
+    float env=sinf(u*3.14159f); env=sqrtf(env);
+    float tongues=0.55f+0.50f*fbm(u*4.2f+seed*0.37f, phase*0.8f, seed, 2);
+    float turb=fbm(u*6.0f, v*3.2f-phase*2.6f, seed+7u, 4);
+    float hgt=tongues*env;
+    float I=(hgt-v)/(hgt+0.001f)*1.35f+(turb-0.5f)*1.05f;
+    I=clampf(I,0,1);
+    if(I<0.06f) continue;
+    uint32_t c=ramp(FIRE,6,clampf(I*1.08f,0,1));
+    int a=(int)(smooth01(0.06f,0.42f,I)*alpha);
+    cv_px(x,y,c,a);
+  }
+}
+
+/*  Bubble label: dark keyline, then a lacquered body with a real bevel.
+ *  The same bubble strokes as the cabinet type, at canvas resolution. */
+static void cv_label(const char*s,float cx,float cy,float px,
+                     const uint32_t*rampc,int nr,uint32_t line,float lineW,float bevel){
+  m_clear(cvm); m_text(cvm,s,cx,cy,px,0.62f);
+  m_dilate(cvm,cvm2,lineW);
+  cv_fill_mask(cvm2,line,line,255);
+  mat_t m=mat_candy(rampc,nr,bevel);
+  m.spec=0.7f;
+  cv_shade(cvm,&m,255);
+}
+
+/* the chrome studio ring's cross-section: a torus, lit and reflecting */
+static uint32_t ring_px(float dx,float dy,float r,float rc,float hw,int kind){
+  float t=clampf((r-rc)/hw,-1,1);
+  float nr=t*0.93f, nz=sqrtf(1.0f-nr*nr);
+  float nx=dx/r*nr, ny=dy/r*nr;
+  uint32_t c=env_map(env_up(nx,ny,nz),kind);
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ);
+  float hx=LX/ll, hy=LY/ll, hz=LZ/ll+1.0f, hl=sqrtf(hx*hx+hy*hy+hz*hz);
+  float sd=(nx*hx+ny*hy+nz*hz)/hl;
+  float sp=ipow(clampf(sd,0,1),60);
+  /* an azimuthal ripple, as a real softbox is not one even panel */
+  float ca=dx/r, sa=dy/r;
+  float s3=3.0f*sa-4.0f*sa*sa*sa, c3=4.0f*ca*ca*ca-3.0f*ca;      /* sin 3a, cos 3a */
+  c=scalec(c,0.92f+0.10f*(s3*0.825f+c3*0.565f));
+  return mixc(c,0xFFFFFF,sp*0.9f);
+}
+
+/* ── the medallion ─────────────────────────────────────────────────
+ *  Every symbol sits on a chrome-ringed, domed disc, the way the premium
+ *  symbols on a modern cabinet do.  The ring is a lit torus reflecting a
+ *  studio, so it carries the hard horizon line that makes chrome read
+ *  as chrome; a dark groove steps down to the disc; the disc is a
+ *  shallow dome with wrap lighting, a shadow under the lip where the
+ *  ring blocks the key light, and a cool rim light opposite.
+ * ---------------------------------------------------------------- */
+static uint8_t *medalRing=NULL;   /* ring, groove and lip: the same on every medal */
+static void cv_medal(uint32_t lo,uint32_t mid,uint32_t hi){
+  const float cx=U(46), cy=U(46);
+  if(!medalRing){
+    medalRing=(uint8_t*)calloc(CVN,4);
+    if(medalRing){
+      const float R0=U(45.4f), R1=U(39.4f), RG=U(38.5f), RD=U(37.8f);
+      for(int y=0;y<CANH;y++) for(int x=0;x<CANW;x++){
+        float dx=x+0.5f-cx, dy=y+0.5f-cy, r=sqrtf(dx*dx+dy*dy);
+        if(r>R0||r<RD) continue;
+        uint32_t c;
+        if(r>=R1) c=ring_px(dx,dy,r,(R0+R1)*0.5f,(R0-R1)*0.5f,0);
+        else if(r>=RG){ float t=(r-RG)/(R1-RG); c=mixc(0x05060A,0x2A2E3A,t*t); }
+        else {
+          float t=(r-RD)/(RG-RD);
+          float lit=clampf(0.5f+(dx*0.55f+dy*0.8f)/r*0.5f,0,1);
+          c=mixc(0x2A2E3A,mixc(0x8A94AA,0xF0F4FF,lit),1.0f-t);
+        }
+        uint8_t*o=medalRing+(y*CANW+x)*4;
+        o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+        o[3]=(uint8_t)(r>R0-1.5f ? (int)(255*clampf((R0-r)/1.5f,0,1)) : 255);
+      }
+    }
+  }
+  const float R0=U(45.4f), R1=U(39.4f), RG=U(38.5f), RD=U(37.8f);
+  int x0=(int)(cx-R0-2), x1=(int)(cx+R0+3), y0=(int)(cy-R0-2), y1=(int)(cy+R0+3);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  uint32_t st[4]={scalec(lo,0.7f),lo,mid,hi};
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=x+0.5f-cx, dy=y+0.5f-cy, r=sqrtf(dx*dx+dy*dy);
+    if(r>R0) continue;
+    uint32_t c;
+    if(r>=RD && medalRing){
+      const uint8_t*m=medalRing+(y*CANW+x)*4;
+      cv_px(x,y,RGB(m[0],m[1],m[2]),m[3]);
+      continue;
+    }
+    if(r>=R1){                                          /* chrome torus   */
+      c=ring_px(dx,dy,r,(R0+R1)*0.5f,(R0-R1)*0.5f,0);
+    } else if(r>=RG){                                   /* the groove     */
+      float t=(r-RG)/(R1-RG);
+      c=mixc(0x05060A,0x2A2E3A,t*t);
+    } else if(r>=RD){                                   /* inner lip      */
+      float t=(r-RD)/(RG-RD);
+      float lit=clampf(0.5f+(dx*0.55f+dy*0.8f)/r*0.5f,0,1);   /* catches light low-right */
+      c=mixc(0x2A2E3A,mixc(0x8A94AA,0xF0F4FF,lit),1.0f-t);
+    } else {                                            /* the dome       */
+      float u=r/RD;
+      float nx=dx/RD*0.62f, ny=dy/RD*0.62f, nz=sqrtf(1.0f-(nx*nx+ny*ny));
+      float ndl=nx*lx+ny*ly+nz*lz;
+      float w=clampf((ndl+0.30f)/1.30f,0,1);
+      c=ramp(st,4,w*0.92f+0.08f*(1.0f-u));
+      /* shadow under the lip, upper left, where the ring hides the key */
+      float ao=smooth01(0.72f,1.0f,u)*clampf(-(dx*0.55f+dy*0.83f)/r,0,1);
+      c=scalec(c,1.0f-ao*0.55f);
+      /* cool rim light opposite */
+      float rl=smooth01(0.80f,1.0f,u)*clampf((dx*0.5f+dy*0.86f)/r,0,1);
+      c=mixc(c,mixc(hi,0xFFFFFF,0.35f),rl*0.55f);
+      /* a soft, wide specular bloom on the dome */
+      float sx=dx/RD+0.30f, sy=dy/RD+0.42f;
+      float sp=clampf(1.0f-sqrtf(sx*sx+sy*sy)*1.6f,0,1);
+      c=mixc(c,mixc(hi,0xFFFFFF,0.5f),sp*sp*0.30f);
+    }
+    int a = r>R0-1.5f ? (int)(255*clampf((R0-r)/1.5f,0,1)) : 255;
+    cv_px(x,y,c,a);
+  }
+}
+
+/*  Glass over the finished symbol: a crisp window reflection across the
+ *  top of the dome and a glint on the ring.  Very light, but it is what
+ *  puts the art UNDER something rather than printed on the surface.  */
+static void cv_glass(void){
+  const float cx=U(46), cy=U(46), RD=U(37.8f);
+  int x0=(int)(cx-RD), x1=(int)(cx+RD+1), y0=(int)(cy-RD), y1=(int)(cy+1);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=x+0.5f-cx, dy=y+0.5f-cy;
+    if(dx*dx+dy*dy>RD*RD*0.93f) continue;
+    /* crescent: inside the dome, above a flatter ellipse */
+    float ex=dx/(RD*1.02f), ey=(dy+RD*0.30f)/(RD*0.62f);
+    if(ex*ex+ey*ey<1.0f) continue;
+    float v=clampf(-dy/RD,0,1);
+    int a=(int)(smooth01(0.05f,0.75f,v)*46.0f);
+    cv_px(x,y,0xFFFFFF,a);
+  }
+  cv_sparkle(U(17.5f),U(21.0f),U(7.5f),200);
+}
+
+/* ---- pieces shared by several symbols ---- */
+
+/*  The 7.  Authored on 8..84 x 8..89, placed scaled about (ox,oy).  A
+ *  gold rim with a mirror bevel round a lacquered body that glows from
+ *  the core outward, like light through red glass.                    */
 static void seven_shape(float ox,float oy,float s,const uint32_t*body,int nb,int rim){
   pt_t p[7]={{8,8},{84,8},{84,26},{59,89},{29,89},{61,27},{8,27}};
   for(int i=0;i<7;i++){ p[i].x=U(ox+(p[i].x-46)*s); p[i].y=U(oy+(p[i].y-48)*s); }
+  m_clear(cvm3); m_poly(cvm3,p,7);                        /* the body   */
   if(rim){
-    cv_poly_outline(p,7,U(5.6f*s),0x1A0004,255);          /* contact shadow  */
-    cv_poly_outline(p,7,U(3.9f*s),0x6A4A08,255);          /* dark gold under */
-    cv_poly_outline(p,7,U(2.3f*s),0xFFE9A8,255);          /* bright gold rim */
+    m_dilate(cvm3,cvm2,U(3.4f*s));                         /* gold rim   */
+    m_dilate(cvm2,cvm,U(1.9f*s));                          /* keyline    */
+    cv_fill_mask_at(cvm,(int)U(0.9f),(int)U(1.6f),0x000000,120);
+    cv_fill_mask(cvm,0x1A0604,0x1A0604,255);
+    mat_t g=mat_gold(2.6f*s);
+    cv_shade(cvm2,&g,255);
   }
-  cv_polyN(p,7,body,nb,255);
-  pt_t hl[4]={{13,11},{79,11},{77,17},{13,17}};
+  mat_t b=mat_candy(body,nb,4.0f*s);
+  b.glow=mixc(body[0],0xFFD060,0.55f); b.glowAmt=0.30f; b.glowR=8.0f*s;
+  b.spec=0.9f; b.shin=36.0f;
+  cv_shade(cvm3,&b,255);
+  /* a lacquer highlight along the top bar */
+  pt_t hl[4]={{13,11.5f},{79,11.5f},{78,15.5f},{14,15.5f}};
   for(int i=0;i<4;i++){ hl[i].x=U(ox+(hl[i].x-46)*s); hl[i].y=U(oy+(hl[i].y-48)*s); }
-  cv_poly(hl,4,0xFFFFFF,0xFFC0B0,150);                     /* top specular    */
-  pt_t sh[4]={{61,27},{67,27},{40,89},{33,89}};
-  for(int i=0;i<4;i++){ sh[i].x=U(ox+(sh[i].x-46)*s); sh[i].y=U(oy+(sh[i].y-48)*s); }
-  cv_poly(sh,4,0x000000,0x000000,60);                      /* inner shade     */
+  cv_poly(hl,4,0xFFFFFF,0xFFFFFF,110);
+  pt_t hl2[4]={{63,29},{66,29},{47,74},{45,74}};
+  for(int i=0;i<4;i++){ hl2[i].x=U(ox+(hl2[i].x-46)*s); hl2[i].y=U(oy+(hl2[i].y-48)*s); }
+  cv_poly(hl2,4,0xFFFFFF,0xFFFFFF,60);
 }
 
-/* a licking flame: a few wavy tongues, yellow at the tip, red at the root */
+/* flames licking up behind the 7: phase 0 is the resting frame */
+static float flamePhase = 0.0f;
 static void flames(float cx,float cy,float s){
-  static const uint32_t fire[4]={0xFFFAC0,0xFFC81E,0xFF5A0C,0x9A0E00};
-  static const float fl[6][3]={{-24,4,30},{-13,0,40},{-1,-3,34},{11,-2,42},{22,2,28},{-19,14,20}};
-  for(int k=0;k<6;k++){
-    float x=cx+fl[k][0]*s, y=cy+fl[k][1]*s, h=fl[k][2]*s, w=7.5f*s;
-    pt_t t[8]={{x-w,y},{x-w*0.9f,y-h*0.35f},{x-w*0.25f,y-h*0.55f},{x+w*0.15f,y-h},
-               {x+w*0.35f,y-h*0.5f},{x+w*0.95f,y-h*0.3f},{x+w,y},{x,y+w*0.4f}};
-    for(int i=0;i<8;i++){ t[i].x=U(t[i].x); t[i].y=U(t[i].y); }
-    cv_poly_outline(t,8,U(1.4f),0x5A0800,150);
-    cv_polyN(t,8,fire,4,240);
+  cv_fire(cx-60*s,cy-56*s,cx+60*s,cy+8*s,flamePhase,77u,255);
+}
+
+/*  A blaze round the wild 7: the 7's own silhouette, blurred and lifted
+ *  a few units, becomes the fuel; turbulence scrolling up through it
+ *  gives the tongues.  Painted before the 7, so only the aura shows.  */
+static void seven_aura(float ox,float oy,float s){
+  static const uint32_t FIRE[6]={0x3A0200,0xB01404,0xFF4A08,0xFF9A18,0xFFE070,0xFFFFE0};
+  pt_t p[7]={{8,8},{84,8},{84,26},{59,89},{29,89},{61,27},{8,27}};
+  for(int i=0;i<7;i++){ p[i].x=U(ox+(p[i].x-46)*s); p[i].y=U(oy+(p[i].y-48)*s); }
+  m_clear(cvm); m_poly(cvm,p,7);
+  int x0,y0,x1,y1;
+  if(!f_blur(cvm,cvg,(int)U(5.5f),2,&x0,&y0,&x1,&y1)) return;
+  int lift=(int)U(5.0f);
+  const float R0=U(37.8f), cx=U(46), cy=U(46);
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    int ys=y+lift; if(ys>=CANH) continue;
+    float a=cvg[ys*CANW+x];
+    if(a<0.02f) continue;
+    float dx=x+0.5f-cx, dy=y+0.5f-cy;
+    if(dx*dx+dy*dy>R0*R0) continue;                 /* inside the disc only */
+    float u=(float)x/CANW, v=(float)y/CANH;
+    float turb=fbm(u*10.0f,v*7.0f+flamePhase*3.0f,91u,4);
+    float I=clampf(a*2.8f+(turb-0.5f)*1.5f-0.12f,0,1)*clampf((1.0f-a)*4.0f,0,1);
+    if(I<0.05f) continue;
+    cv_px(x,y,ramp(FIRE,6,clampf(I*1.15f,0,1)),(int)(smooth01(0.05f,0.45f,I)*240));
   }
 }
 
-/* a small rounded ribbon with a label, for the feature symbols */
+/*  A banner across the lower medal: folded tails, a gold-rimmed band
+ *  and the word in bubble type, sized to fit.                         */
 static void ribbon(float y,float w,const char*label,uint32_t top,uint32_t bot,uint32_t ink){
-  float x=46-w*0.5f;
-  cv_rrect(U(x-1),U(y-1),U(w+2),U(12),U(3.5f),0x000000,0x000000,170);
-  cv_rrect(U(x),U(y),U(w),U(10),U(3),top,bot,255);
-  cv_rrect(U(x+1.5f),U(y+0.8f),U(w-3),U(3.6f),U(2),0xFFFFFF,0xFFFFFF,80);
-  cv_text(label,U(46),U(y+5),U(1.55f),ink,255);
+  float x=46-w*0.5f, h=12.5f;
+  /* the folded tails, tucked behind */
+  for(int sd=0;sd<2;sd++){
+    float ex = sd? x+w-2.0f : x+2.0f, dir = sd? 1.0f : -1.0f;
+    pt_t t[5]={{ex,y+2.5f},{ex+dir*7.5f,y+3.5f},{ex+dir*5.0f,y+h*0.5f+2.5f},
+               {ex+dir*7.5f,y+h+1.5f},{ex,y+h+0.5f}};
+    for(int i=0;i<5;i++){ t[i].x=U(t[i].x); t[i].y=U(t[i].y); }
+    m_clear(cvm); m_poly(cvm,t,5);
+    m_dilate(cvm,cvm2,U(0.9f));
+    cv_fill_mask(cvm2,0x120804,0x120804,255);
+    uint32_t tr[3]={scalec(bot,0.75f),scalec(bot,0.55f),scalec(bot,0.35f)};
+    mat_t tm=mat_candy(tr,3,1.6f);
+    cv_shade(cvm,&tm,255);
+  }
+  m_clear(cvm3); m_rrect(cvm3,U(x),U(y),U(w),U(h),U(3.2f));
+  m_dilate(cvm3,cvm2,U(1.5f));
+  m_dilate(cvm2,cvm,U(0.9f));
+  cv_fill_mask_at(cvm,0,(int)U(1.2f),0x000000,130);
+  cv_fill_mask(cvm,0x140A02,0x140A02,255);
+  mat_t g=mat_gold(1.4f);
+  cv_shade(cvm2,&g,255);
+  uint32_t br[4]={mixc(top,0xFFFFFF,0.35f),top,bot,scalec(bot,0.7f)};
+  mat_t bm=mat_candy(br,4,2.2f);
+  cv_shade(cvm3,&bm,255);
+  cv_rrect(U(x+1.8f),U(y+1.0f),U(w-3.6f),U(3.6f),U(1.8f),0xFFFFFF,0xFFFFFF,70);
+  int n=(int)strlen(label);
+  float px=(w-7.0f)/(float)(n*6-1);
+  if(px>2.0f) px=2.0f;
+  m_clear(cvm); m_text(cvm,label,U(46),U(y+h*0.5f+0.3f),U(px),0.60f);
+  cv_fill_mask_at(cvm,0,(int)U(0.5f),0xFFFFFF,90);          /* engraved lip */
+  cv_fill_mask(cvm,mixc(ink,0x000000,0.1f),ink,255);
 }
 
-/* a small leaf, lit */
+/*  A leaf: pointed, tilted, lit, with a midrib and veins.             */
 static void leaf(float cx,float cy,float rx,float ry){
-  cv_ellipse_lit(cx,cy,rx,ry,0x0E4A12,0x3FA640,0xC4F5A8);
-  cv_ellipse(cx,cy,rx*0.9f,ry*0.18f,0x0E4A12,0x0E4A12,120);   /* midrib */
+  static const uint32_t LG[4]={0xC6F5A0,0x5CC04A,0x21862A,0x0C4A14};
+  const float ang=-0.38f, ca=cosf(ang), sa=sinf(ang);
+  pt_t p[24];
+  for(int i=0;i<12;i++){
+    float t=i/11.0f, x=-rx+2*rx*t, w=ry*sinf(t*3.14159f)*(1.0f-0.25f*t);
+    p[i].x=cx+x*ca-(-w)*sa; p[i].y=cy+x*sa+(-w)*ca;
+  }
+  for(int i=0;i<12;i++){
+    float t=1.0f-i/11.0f, x=-rx+2*rx*t, w=ry*sinf(t*3.14159f)*(1.0f-0.25f*t)*0.85f;
+    p[12+i].x=cx+x*ca-w*sa; p[12+i].y=cy+x*sa+w*ca;
+  }
+  m_clear(cvm3); m_poly(cvm3,p,24);
+  m_dilate(cvm3,cvm2,U(0.9f));
+  cv_fill_mask(cvm2,0x082A0C,0x082A0C,255);
+  mat_t m=mat_candy(LG,4,2.6f);
+  m.spec=0.8f; m.shin=30.0f;
+  cv_shade(cvm3,&m,255);
+  /* midrib and a few veins */
+  for(int i=0;i<=24;i++){
+    float t=i/24.0f, x=-rx*0.92f+1.84f*rx*t, bow=-ry*0.10f*sinf(t*3.14159f);
+    float px=cx+x*ca-bow*sa, py=cy+x*sa+bow*ca;
+    cv_circle(px,py,U(0.45f),0xDFFFC0,0xDFFFC0,150);
+  }
+  for(int k=1;k<=3;k++){
+    float t=k/4.0f, x=-rx+2*rx*t;
+    for(int sd=-1;sd<=1;sd+=2) for(int i=0;i<=8;i++){
+      float q=i/8.0f, vx=x+q*rx*0.28f, vw=sd*q*ry*0.62f;
+      cv_circle(cx+vx*ca-vw*sa,cy+vx*sa+vw*ca,U(0.28f),0xBFF0A0,0xBFF0A0,90);
+    }
+  }
+}
+
+/* a stem: a lit capsule chain along a quadratic curve */
+static void stem(float ax,float ay,float bx,float by,float bend,float r){
+  for(int i=0;i<=30;i++){
+    float t=i/30.0f;
+    float mx=(ax+bx)*0.5f+bend, my=(ay+by)*0.5f;
+    float x=(1-t)*(1-t)*ax+2*(1-t)*t*mx+t*t*bx, y=(1-t)*(1-t)*ay+2*(1-t)*t*my+t*t*by;
+    cv_circle(x,y,r*1.25f,0x1A1004,0x1A1004,255);
+  }
+  for(int i=0;i<=30;i++){
+    float t=i/30.0f;
+    float mx=(ax+bx)*0.5f+bend, my=(ay+by)*0.5f;
+    float x=(1-t)*(1-t)*ax+2*(1-t)*t*mx+t*t*bx, y=(1-t)*(1-t)*ay+2*(1-t)*t*my+t*t*by;
+    cv_circle(x,y,r,0x6A8A1A,0x2E4A08,255);
+    cv_circle(x-r*0.35f,y-r*0.35f,r*0.38f,0xD8F090,0xD8F090,170);
+  }
+}
+
+/*  Radiating light behind a feature symbol: soft rays over the disc. */
+static void cv_rays(float cx,float cy,float r0,float r1,int n,float rot,uint32_t col,int alpha){
+  int x0=(int)(cx-r1), x1=(int)(cx+r1+1), y0=(int)(cy-r1), y1=(int)(cy+r1+1);
+  if(x0<0) x0=0;
+  if(y0<0) y0=0;
+  if(x1>CANW) x1=CANW;
+  if(y1>CANH) y1=CANH;
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=x+0.5f-cx, dy=y+0.5f-cy, r=sqrtf(dx*dx+dy*dy);
+    if(r>r1||r<1.0f) continue;
+    float a=fast_atan2(dy,dx)*n/TAU+rot;
+    float f=a-floorf(a);
+    float ray=smooth01(0.30f,0.5f,f)*(1.0f-smooth01(0.5f,0.70f,f));
+    float fall=clampf((r-r0)/(r1-r0),0,1);
+    float core=1.0f-clampf(r/r1,0,1);
+    int al=(int)(alpha*(ray*(1.0f-fall)*0.9f+core*core*0.35f));
+    cv_px(x,y,col,al);
+  }
+}
+
+/* a faceted gem: dark crown, bright table, sparkle */
+static void cv_gem(float cx,float cy,float r,uint32_t lo,uint32_t mid,uint32_t hi){
+  cv_circle(cx,cy+r*0.12f,r*1.22f,0x140800,0x140800,255);
+  cv_fruit(cx,cy,r,r,lo,mid,hi,mid,0,0,0);
+  pt_t t[6];
+  for(int i=0;i<6;i++){ float a=TAU*i/6.0f+0.26f; t[i].x=cx+cosf(a)*r*0.52f; t[i].y=cy+sinf(a)*r*0.52f; }
+  cv_poly(t,6,mixc(hi,0xFFFFFF,0.4f),mid,150);
+  cv_sparkle(cx-r*0.35f,cy-r*0.4f,r*1.1f,230);
 }
 
 /* ---- individual pieces ---- */
 
+/*  The wild is rendered five times (at rest and four flame phases), and
+ *  only the fire differs, so the medal and the 7 over it are kept as
+ *  two layers and the fire is painted between them each time.         */
+static uint8_t *s7bg=NULL, *s7fg=NULL;
+static int s7cached=0;
+static void cv_over_layer(const uint8_t*l){
+  for(int i=0;i<CVN;i++){ const uint8_t*p=l+i*4; if(p[3]) cv_px(i%CANW,i/CANW,RGB(p[0],p[1],p[2]),p[3]); }
+}
 static void art_seven(void){
-  static const uint32_t body[5]={0xFFC4A8,0xFF6A4A,0xE81C2C,0x9A0C1A,0x54060E};
+  static const uint32_t body[5]={0xFF8A70,0xFF3A28,0xE0101C,0x980614,0x4A020A};
+  if(!s7bg){ s7bg=(uint8_t*)malloc(sizeof canvas); s7fg=(uint8_t*)malloc(sizeof canvas); }
+  if(s7bg && s7fg && s7cached){
+    memcpy(canvas,s7bg,sizeof canvas);
+    seven_aura(46,49,0.64f);
+    flames(47,30,0.52f);
+    cv_over_layer(s7fg);
+    return;
+  }
   cv_medal(0x062A0A,0x1F8A30,0x9AF080);
+  cv_rays(U(46),U(40),U(10),U(38),12,0.1f,0xE0FFB0,70);
+  if(s7bg && s7fg){
+    memcpy(s7bg,canvas,sizeof canvas);
+    cv_clear();
+    seven_shape(46,49,0.64f,body,5,1);
+    ribbon(76.5f,40,"WILD",0xFFE9A8,0xC08A10,0x3A1400);
+    memcpy(s7fg,canvas,sizeof canvas);
+    s7cached=1;
+    memcpy(canvas,s7bg,sizeof canvas);
+    seven_aura(46,49,0.64f);
+    flames(47,30,0.52f);
+    cv_over_layer(s7fg);
+    return;
+  }
+  seven_aura(46,49,0.64f);
   flames(47,30,0.52f);                       /* tips lick up behind the top bar */
   seven_shape(46,49,0.64f,body,5,1);
-  ribbon(79,34,"WILD",0xFFE9A8,0xC08A10,0x3A1400);
+  ribbon(76.5f,40,"WILD",0xFFE9A8,0xC08A10,0x3A1400);
 }
 
 static void art_diamond(void){
-  static const uint32_t topf[3]={0xFFFFFF,0xD6F6FF,0x74D2F4};
-  static const uint32_t lft[3] ={0xBEEFFF,0x53BCE6,0x0B5F8C};
-  static const uint32_t rgt[3] ={0x8FDEF8,0x2E9BC8,0x063F60};
   cv_medal(0x04123A,0x123E92,0x74B0FF);
-  const float s=0.74f, ox=46, oy=49;
-  #define DP(px,py) {U(ox+((px)-46)*s),U(oy+((py)-52)*s)}
-  pt_t all[5]={DP(24,16),DP(68,16),DP(84,38),DP(46,88),DP(8,38)};
-  cv_poly_outline(all,5,U(5.0f*s),0x000B12,255);
-  cv_poly_outline(all,5,U(2.4f*s),0xF2FEFF,255);
-  pt_t L[3]={DP(8,38),DP(46,38),DP(46,88)};
-  pt_t R[3]={DP(46,38),DP(84,38),DP(46,88)};
-  cv_polyN(L,3,lft,3,255);
-  cv_polyN(R,3,rgt,3,255);
-  pt_t T[4]={DP(24,16),DP(68,16),DP(84,38),DP(8,38)};
-  cv_polyN(T,4,topf,3,255);
-  pt_t s1[4]={DP(24,16),DP(28,16),DP(18,38),DP(13,38)};
-  pt_t s2[4]={DP(64,16),DP(68,16),DP(79,38),DP(74,38)};
-  cv_poly(s1,4,0xFFFFFF,0xFFFFFF,120); cv_poly(s2,4,0xFFFFFF,0xFFFFFF,120);
-  pt_t s3[4]={DP(36,16),DP(40,16),DP(46,38),DP(43,38)};
-  cv_poly(s3,4,0xFFFFFF,0xFFFFFF,80);
-  pt_t sp[8]={DP(33,24),DP(36,30),DP(42,32),DP(36,34),DP(33,41),DP(30,34),DP(24,32),DP(30,30)};
-  cv_poly(sp,8,0xFFFFFF,0xFFFFFF,225);
+  const float s=0.80f, ox=46, oy=47;
+  #define DP(px,py) {U(ox+((px)-46)*s),U(oy+((py)-50)*s)}
+  pt_t all[5]={DP(28,18),DP(64,18),DP(84,38),DP(46,86),DP(8,38)};
+  m_clear(cvm3); m_poly(cvm3,all,5);
+  m_dilate(cvm3,cvm2,U(2.2f*s));
+  m_dilate(cvm2,cvm,U(1.6f*s));
+  cv_fill_mask_at(cvm,(int)U(0.8f),(int)U(1.6f),0x000000,120);
+  cv_fill_mask(cvm,0x000814,0x000814,255);
+  mat_t ch={CHROMEFACE,5,1.8f*s,0.95f,2,1.0f,40.0f,0,0,0,0,1.0f};
+  cv_shade(cvm2,&ch,255);
+  /* crown: table edge T0..T3, girdle G0..G4 */
+  pt_t T[4]={DP(28,18),DP(40,18),DP(52,18),DP(64,18)};
+  pt_t Gd[5]={DP(8,38),DP(27,38),DP(46,38),DP(65,38),DP(84,38)};
+  pt_t C=DP(46,86);
+  static const uint32_t crown[7]={0xE6FAFF,0x7CD2F4,0xFFFFFF,0x4AB0E0,0xF4FDFF,0x9ADFF8,0x2E8CC4};
+  pt_t tri[7][3]={{T[0],Gd[0],Gd[1]},{T[0],Gd[1],T[1]},{T[1],Gd[1],Gd[2]},{T[1],Gd[2],T[2]},
+                  {T[2],Gd[2],Gd[3]},{T[2],Gd[3],T[3]},{T[3],Gd[3],Gd[4]}};
+  for(int i=0;i<7;i++) cv_poly(tri[i],3,mixc(crown[i],0xFFFFFF,0.25f),crown[i],255);
+  /* pavilion: eight facets meeting at the culet, alternating light */
+  static const uint32_t pav[8]={0x0C4E86,0x5EC4F0,0x0A3A6A,0xB8EEFF,0x1C6CA8,0x7AD6F8,0x0A3460,0x3A9AD4};
+  for(int i=0;i<8;i++){
+    float xa=8+i*9.5f, xb=8+(i+1)*9.5f;
+    pt_t q[3]={DP(xa,38),DP(xb,38),C};
+    cv_poly(q,3,pav[i],scalec(pav[i],0.55f),255);
+  }
+  /* fire: a few facets throw colour */
+  { pt_t q[3]={DP(36,38),DP(46,38),DP(44,62)}; cv_poly(q,3,0xFFB0E0,0xFFB0E0,70); }
+  { pt_t q[3]={DP(56,38),DP(65,38),DP(52,58)}; cv_poly(q,3,0xFFF0A0,0xFFF0A0,80); }
+  { pt_t q[3]={DP(18,38),DP(27,38),DP(30,50)}; cv_poly(q,3,0xA0FFD0,0xA0FFD0,70); }
+  /* table: a bright band across the top */
+  pt_t tb[4]={DP(29,18),DP(63,18),DP(61,21),DP(31,21)};
+  cv_poly(tb,4,0xFFFFFF,0xE0F8FF,230);
+  /* facet edges catch the light */
+  for(int i=0;i<5;i++){
+    pt_t a=Gd[i];
+    pt_t e[4]={{a.x-U(0.25f),a.y},{a.x+U(0.25f),a.y},{C.x+U(0.15f),C.y},{C.x-U(0.15f),C.y}};
+    cv_poly(e,4,0xFFFFFF,0xB0E8FF,120);
+  }
+  pt_t gl[4]={{Gd[0].x,Gd[0].y-U(0.3f)},{Gd[4].x,Gd[4].y-U(0.3f)},{Gd[4].x,Gd[4].y+U(0.35f)},{Gd[0].x,Gd[0].y+U(0.35f)}};
+  cv_poly(gl,4,0xFFFFFF,0xFFFFFF,200);
   #undef DP
+  cv_sparkle(U(33),U(24),U(11),255);
+  cv_sparkle(U(62),U(56),U(6),200);
+  cv_sparkle(U(22),U(40),U(4.5f),180);
 }
 
 static void art_bell(void){
-  static const uint32_t gold[5]={0xFFFBE0,0xFFE07A,0xE0A81C,0x9A6A08,0x5E4004};
   cv_medal(0x3A0408,0xA81222,0xFF8A78);
-  const float s=0.72f, ox=46, oy=47;
+  cv_rays(U(46),U(44),U(12),U(38),10,0.2f,0xFFD0A0,40);
+  const float s=0.72f, ox=46, oy=46;
   #define BP(px,py) {U(ox+((px)-46)*s),U(oy+((py)-48)*s)}
-  pt_t p[12]={BP(46,9),BP(60,15),BP(69,30),BP(74,52),BP(80,66),BP(84,74),
-              BP(8,74),BP(12,66),BP(18,52),BP(23,30),BP(32,15),BP(46,9)};
-  cv_poly_outline(p,12,U(5.0f*s),0x140C00,255);
-  cv_poly_outline(p,12,U(2.4f*s),0xFFF6C8,255);
-  cv_polyN(p,12,gold,5,255);
-  pt_t hl[6]={BP(37,17),BP(44,14),BP(39,29),BP(33,52),BP(29,67),BP(24,67)};
-  cv_poly(hl,6,0xFFFFFF,0xFFF2C0,135);
-  pt_t dk[4]={BP(64,29),BP(74,53),BP(79,67),BP(67,67)};
-  cv_poly(dk,4,0x3A2600,0x3A2600,90);
-  cv_rrect(U(ox-38*s),U(oy+19*s),U(76*s),U(9*s),U(3*s),0xFFF6C8,0xB07C10,255);  /* lip */
-  cv_sphere(U(ox),U(oy+36*s),U(9*s),0x4A3200,0xD8A020,0xFFF0B0);             /* clapper */
+  pt_t p[12]={BP(46,9),BP(60,15),BP(69,30),BP(72,52),BP(78,64),BP(84,72),
+              BP(8,72),BP(14,64),BP(20,52),BP(23,30),BP(32,15),BP(46,9)};
+  /* clapper first, it hangs below the lip */
+  cv_circle(U(ox),U(oy+37*s),U(10.5f*s),0x140800,0x140800,255);
+  cv_fruit(U(ox),U(oy+36*s),U(9*s),U(9*s),0x4A2A00,0xD8A020,0xFFF4C0,0xFFB020,0,0,0);
+  m_clear(cvm3); m_poly(cvm3,p,12);
+  m_rrect(cvm3,U(ox-40*s),U(oy+20*s),U(80*s),U(10*s),U(5*s));
+  cv_circle(U(ox),U(oy-40*s),U(5*s),0x140800,0x140800,255);          /* crown loop */
+  m_dilate(cvm3,cvm,U(2.0f));
+  cv_fill_mask_at(cvm,(int)U(0.8f),(int)U(1.6f),0x000000,110);
+  cv_fill_mask(cvm,0x140800,0x140800,255);
+  mat_t g={GOLDTURN,7,6.5f,0.75f,1,1.0f,34.0f,0xFFF4C0,0.0f,0,1,1.0f};
+  cv_shade(cvm3,&g,255);
+  cv_fruit(U(ox),U(oy-40*s),U(3.6f*s),U(3.6f*s),0x6A4206,0xE8B03A,0xFFF4C8,0xFFD560,0,0,0);
+  /* the lip is a separate band: re-shade it so it reads as a rolled rim */
+  m_clear(cvm3); m_rrect(cvm3,U(ox-40*s),U(oy+20*s),U(80*s),U(10*s),U(5*s));
+  mat_t lip={GOLDFACE,6,3.0f,0.8f,1,1.0f,34.0f,0,0,0,0,1.0f};
+  cv_shade(cvm3,&lip,255);
   #undef BP
+  cv_sparkle(U(34),U(26),U(8),220);
 }
 
 static void art_bar(void){
-  static const uint32_t gold[6]={0xFFFDF0,0xFFE8A0,0xF2B622,0xC88A10,0xFFD860,0x8A5A08};
   cv_medal(0x0C0E16,0x2A2E3E,0x7A8098);
-  /* the plaque: dark bevel, gold face, black lettering, like the reference */
-  cv_rrect(U(9),U(31),U(74),U(34),U(6),0x000000,0x000000,180);
-  cv_rrect(U(8),U(29),U(76),U(34),U(6),0x4A2E04,0x2A1A02,255);
-  pt_t q[52]; int n=0; const int Q=10;
-  float xx=U(10.5f), yy=U(31.5f), ww=U(71), hh=U(29), rr=U(4.5f);
-  for(int i=0;i<=Q;i++){ float a=-TAU/4+TAU/4*i/Q; q[n].x=xx+ww-rr+cosf(a)*rr; q[n].y=yy+rr+sinf(a)*rr; n++; }
-  for(int i=0;i<=Q;i++){ float a=TAU/4*i/Q;        q[n].x=xx+ww-rr+cosf(a)*rr; q[n].y=yy+hh-rr+sinf(a)*rr; n++; }
-  for(int i=0;i<=Q;i++){ float a=TAU/4+TAU/4*i/Q;  q[n].x=xx+rr+cosf(a)*rr;    q[n].y=yy+hh-rr+sinf(a)*rr; n++; }
-  for(int i=0;i<=Q;i++){ float a=TAU/2+TAU/4*i/Q;  q[n].x=xx+rr+cosf(a)*rr;    q[n].y=yy+rr+sinf(a)*rr; n++; }
-  cv_polyN(q,n,gold,6,255);
-  cv_rrect(U(12),U(32.5f),U(68),U(10),U(3),0xFFFFFF,0xFFFFFF,110);   /* gloss */
-  cv_text("BAR",U(46.6f),U(46.6f),U(3.4f),0x2A1A02,140);            /* engrave */
-  cv_text("BAR",U(46),U(46),U(3.4f),0x120A00,255);
+  /* the plaque: dark keyline, mirror-bevelled gold face */
+  m_clear(cvm3); m_rrect(cvm3,U(8.5f),U(29),U(75),U(34),U(6));
+  m_dilate(cvm3,cvm,U(1.6f));
+  cv_fill_mask_at(cvm,(int)U(1.0f),(int)U(2.0f),0x000000,150);
+  cv_fill_mask(cvm,0x2A1602,0x2A1602,255);
+  mat_t g=mat_gold(4.0f);
+  cv_shade(cvm3,&g,255);
+  /* engraved border line inside the plaque */
+  m_clear(cvm2); m_rrect(cvm2,U(12.5f),U(33),U(67),U(26),U(3.5f));
+  m_clear(cvm3); m_rrect(cvm3,U(13.4f),U(33.9f),U(65.2f),U(24.2f),U(3.0f));
+  m_sub(cvm2,cvm3);
+  cv_fill_mask(cvm2,0x6A4204,0x8A5A0A,200);
+  /* the word: raised black lacquer with a light keyline */
+  static const uint32_t ink[4]={0x4A4A58,0x16161E,0x050508,0x000000};
+  m_clear(cvm); m_text(cvm,"BAR",U(46),U(46.5f),U(3.05f),0.62f);
+  m_dilate(cvm,cvm2,U(1.1f));
+  cv_fill_mask_at(cvm2,(int)U(0.3f),(int)U(0.6f),0x3A2000,200);
+  cv_fill_mask(cvm2,0xFFF8DC,0xE8C060,255);
+  mat_t k={ink,4,1.8f,0.55f,0,1.0f,40.0f,0,0,0,0,1.0f};
+  m_copy(cvm3,cvm);
+  cv_shade(cvm3,&k,255);
+  cv_sparkle(U(15),U(33),U(7),230);
 }
 
 static void art_grapes(void){
   cv_medal(0x0A1030,0x1C2E70,0x6A86D8);
-  /* stem and leaf first, the bunch hangs over them */
-  for(int i=0;i<=20;i++){ float t=i/20.0f; cv_circle(U(48+t*6),U(20-t*10),U(2.2f),0x5A3A10,0x3A2408,255); }
-  leaf(U(60),U(18),U(13),U(6.5f));
-  static const float gp[10][2]={{31,32},{46,30},{61,32},{38,44},{54,44},{30,54},{46,56},{62,54},{38,67},{54,67}};
-  for(int i=0;i<10;i++){
-    cv_circle(U(gp[i][0])+U(0.8f),U(gp[i][1])+U(1.2f),U(9),0x000000,0x000000,110);
-    cv_sphere(U(gp[i][0]),U(gp[i][1]),U(8.8f),0x22063A,0x7A28C0,0xE8B0FF);
+  stem(U(46),U(24),U(52),U(11),U(2),U(1.7f));
+  leaf(U(61),U(17),U(13),U(6.5f));
+  static const float gp[11][2]={{31,32},{46,29},{61,32},{38,43},{54,43},{30,54},{46,55},{62,54},
+                                {38,66},{54,66},{46,77}};
+  for(int i=0;i<11;i++){
+    float x=U(gp[i][0]), y=U(gp[i][1]), r=U(i==10?8.2f:8.9f);
+    cv_circle(x+U(0.6f),y+U(1.2f),r+U(0.6f),0x0A0214,0x0A0214,200);
+    cv_fruit(x,y,r,r,0x1A0430,0x7426BC,0xE2B0FF,0xB040FF,0,0,0);
+    /* the bloom: a dusty haze on the lit side */
+    cv_circle(x-r*0.25f,y-r*0.2f,r*0.62f,0xE8D8FF,0xE8D8FF,26);
   }
-  cv_sphere(U(46),U(78),U(8.2f),0x22063A,0x7A28C0,0xE8B0FF);
 }
 
 static void art_orange(void){
   cv_medal(0x0A1030,0x1C2E70,0x6A86D8);
-  cv_sphere(U(46),U(50),U(30),0x6A2400,0xFF7C12,0xFFE0A8);
-  /* peel dimples, kept off the hot spot so the sphere still reads */
-  uint32_t rs=0x0A4A9Eu;
-  for(int i=0;i<48;i++){
-    rs^=rs<<13; rs^=rs>>17; rs^=rs<<5;
-    float a=(rs&0xFFFF)/65536.0f*TAU, rr=sqrtf(((rs>>16)&0xFFFF)/65536.0f)*U(26);
-    float x=U(46)+cosf(a)*rr, y=U(50)+sinf(a)*rr;
-    cv_circle(x,y,U(0.9f),0xB04A00,0xB04A00,70);
-  }
-  cv_circle(U(46),U(21),U(3.2f),0x6A3A08,0x3A2004,255);                  /* nub  */
-  leaf(U(58),U(20),U(12),U(5.5f));
+  cv_circle(U(47),U(52),U(31.5f),0x140600,0x140600,255);
+  cv_fruit(U(46),U(50),U(30),U(29),0x6A2000,0xFF7C12,0xFFE2A8,0xFF4A00,0.030f,1.4f,11u);
+  cv_ellipse(U(46),U(22.5f),U(5),U(2.6f),0x3A2004,0x6A3A08,255);               /* nub  */
+  cv_circle(U(46),U(21.8f),U(2.2f),0x8AA030,0x4A6010,255);
+  leaf(U(59),U(19),U(12),U(5.5f));
 }
 
 static void art_plum(void){
   cv_medal(0x0A1030,0x1C2E70,0x6A86D8);
-  cv_ellipse_lit(U(46),U(52),U(27),U(29),0x16032A,0x6A1C9A,0xE6A8FF);
-  for(int i=0;i<=30;i++){                                                 /* seam */
-    float t=i/30.0f, y=U(24+t*56), x=U(46)-sinf(t*3.14159f)*U(9);
-    cv_circle(x,y,U(1.3f),0x2A0640,0x2A0640,120);
+  cv_ellipse(U(47),U(54),U(28.5f),U(30),0x0A0214,0x0A0214,255);
+  cv_fruit(U(46),U(52),U(27),U(29),0x14032A,0x6A1C9A,0xE8B0FF,0xC030C0,0,0,0);
+  for(int i=0;i<=40;i++){                                                 /* seam */
+    float t=i/40.0f, y=U(25+t*52), x=U(46)-sinf(t*3.14159f)*U(9);
+    cv_circle(x,y,U(1.2f),0x24053A,0x24053A,110);
+    cv_circle(x-U(1.1f),y,U(0.6f),0xE0B8FF,0xE0B8FF,60);
   }
-  cv_ellipse(U(36),U(38),U(8),U(11),0xFFFFFF,0xFFFFFF,90);              /* bloom */
-  for(int i=0;i<=14;i++){ float t=i/14.0f; cv_circle(U(46+t*3),U(24-t*9),U(1.8f),0x5A3A10,0x3A2408,255); }
-  leaf(U(57),U(17),U(11),U(5));
+  cv_ellipse(U(34),U(40),U(9),U(13),0xF0E0FF,0xF0E0FF,40);              /* bloom */
+  stem(U(46),U(26),U(49),U(14),U(1),U(1.6f));
+  leaf(U(58),U(17),U(11),U(5));
 }
 
 static void art_cherry(void){
   cv_medal(0x0A1030,0x1C2E70,0x6A86D8);
-  for(int i=0;i<=40;i++){
-    float t=i/40.0f;
-    float x=lerpf(U(33),U(50),t), y=lerpf(U(52),U(18),t)-sinf(t*3.14159f)*U(6);
-    cv_circle(x,y,U(2.3f),0x1B5E20,0x0E3D12,255);
-    cv_circle(x-U(0.6f),y-U(0.6f),U(0.9f),0x7BD86A,0x4CAF50,190);
-    float x2=lerpf(U(60),U(53),t), y2=lerpf(U(58),U(19),t)+sinf(t*3.14159f)*U(4);
-    cv_circle(x2,y2,U(2.1f),0x1B5E20,0x0E3D12,255);
-    cv_circle(x2-U(0.6f),y2-U(0.6f),U(0.9f),0x7BD86A,0x4CAF50,190);
-  }
+  stem(U(33),U(46),U(51),U(15),U(-5),U(1.8f));
+  stem(U(60),U(52),U(52),U(15),U(5),U(1.7f));
   leaf(U(64),U(18),U(13),U(6));
-  cv_circle(U(34),U(58),U(19),0x000000,0x000000,90);
-  cv_sphere(U(33),U(56),U(18.5f),0x3A0008,0xD81030,0xFFA0A8);
-  cv_circle(U(61),U(64),U(18),0x000000,0x000000,90);
-  cv_sphere(U(60),U(62),U(17.5f),0x3A0008,0xD81030,0xFFA0A8);
+  cv_circle(U(34),U(58),U(19.5f),0x100004,0x100004,255);
+  cv_fruit(U(33),U(56),U(18.5f),U(18),0x3A0008,0xD81030,0xFFA0A8,0xFF2040,0,0,0);
+  cv_ellipse(U(33),U(40.5f),U(3.5f),U(1.6f),0x3A0008,0x3A0008,120);      /* dimple */
+  cv_circle(U(61),U(64),U(18.5f),0x100004,0x100004,255);
+  cv_fruit(U(60),U(62),U(17.5f),U(17),0x3A0008,0xD81030,0xFFA0A8,0xFF2040,0,0,0);
+  cv_ellipse(U(60),U(47),U(3.2f),U(1.5f),0x3A0008,0x3A0008,120);
 }
 
 static void art_lemon(void){
   cv_medal(0x0A1030,0x1C2E70,0x6A86D8);
-  cv_ellipse_lit(U(46),U(51),U(32),U(23),0x5A4000,0xF0C010,0xFFFAC8);
-  cv_ellipse_lit(U(14),U(51),U(5),U(4),0x5A4000,0xE8B808,0xFFF6B0);      /* nubs */
-  cv_ellipse_lit(U(78),U(51),U(5),U(4),0x5A4000,0xE8B808,0xFFF6B0);
-  uint32_t rs=0x1E30Cu;
-  for(int i=0;i<30;i++){
-    rs^=rs<<13; rs^=rs>>17; rs^=rs<<5;
-    float a=(rs&0xFFFF)/65536.0f*TAU, rr=sqrtf(((rs>>16)&0xFFFF)/65536.0f)*U(27);
-    cv_circle(U(46)+cosf(a)*rr, U(51)+sinf(a)*rr*0.68f, U(0.9f), 0xB88A00,0xB88A00,90);
+  cv_ellipse(U(47),U(53),U(35),U(25),0x140E00,0x140E00,255);
+  cv_fruit(U(14),U(51),U(6),U(4.5f),0x5A4000,0xE8B808,0xFFF6B0,0xFFD000,0,0,0);  /* nubs */
+  cv_fruit(U(78),U(51),U(6),U(4.5f),0x5A4000,0xE8B808,0xFFF6B0,0xFFD000,0,0,0);
+  cv_fruit(U(46),U(51),U(32),U(23),0x4A3000,0xE0AC00,0xFFF4A8,0xFF9800,0.016f,1.9f,5u);
+  leaf(U(62),U(29),U(11),U(5));
+}
+
+/*  A 3-D star: every arm is a ridge, so each arm is two flat facets,
+ *  one toward the light and one away.  Lit per facet from its real
+ *  plane, and reflecting the gold studio.                             */
+static void star3d(float cx,float cy,float ro,float ri,float hgt){
+  pt_t P[10];
+  for(int i=0;i<10;i++){
+    float a=-TAU/4+TAU*i/10.0f, r=(i&1)?ri:ro;
+    P[i].x=cx+cosf(a)*r; P[i].y=cy+sinf(a)*r;
   }
-  leaf(U(64),U(30),U(11),U(5));
+  m_clear(cvm3); m_poly(cvm3,P,10);
+  m_dilate(cvm3,cvm2,U(2.0f));
+  m_dilate(cvm2,cvm,U(1.4f));
+  cv_fill_mask_at(cvm,(int)U(0.8f),(int)U(1.8f),0x000000,130);
+  cv_fill_mask(cvm,0x1A0C00,0x1A0C00,255);
+  mat_t g=mat_gold(1.6f);
+  cv_shade(cvm2,&g,255);
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ);
+  for(int i=0;i<10;i++){
+    pt_t a=P[i], b=P[(i+1)%10];
+    /* facet (centre, a, b), centre raised by hgt */
+    float ux=a.x-cx, uy=a.y-cy, uz=-hgt, vx=b.x-cx, vy=b.y-cy, vz=-hgt;
+    float nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+    if(nz<0){ nx=-nx; ny=-ny; nz=-nz; }
+    float nl=sqrtf(nx*nx+ny*ny+nz*nz); nx/=nl; ny/=nl; nz/=nl;
+    float ndl=(nx*LX+ny*LY+nz*LZ)/ll;
+    uint32_t c=env_map(env_up(nx,ny,nz),1);
+    c=mixc(c,ramp(GOLDFACE,6,0.4f),0.35f);
+    c = ndl>0.55f ? mixc(c,0xFFFFFF,clampf((ndl-0.55f)*1.2f,0,0.6f)) : scalec(c,clampf(0.55f+ndl*0.8f,0.35f,1));
+    pt_t t[3]={{cx,cy},a,b};
+    cv_poly(t,3,c,scalec(c,0.92f),255);
+  }
+  /* the ridges catch a line of light */
+  for(int i=0;i<10;i+=2){
+    pt_t a=P[i];
+    float dx=a.x-cx, dy=a.y-cy, l=sqrtf(dx*dx+dy*dy), px2=-dy/l*U(0.35f), py2=dx/l*U(0.35f);
+    pt_t e[4]={{cx+px2,cy+py2},{a.x,a.y},{cx-px2,cy-py2},{cx,cy}};
+    cv_poly(e,4,0xFFFFFF,0xFFF0C0,i==8||i==0?150:70);
+  }
 }
 
 static void art_star(void){
-  static const uint32_t gold[5]={0xFFFFFF,0xFFF3A8,0xFFC02A,0xE07800,0x8A3C00};
   cv_medal(0x03301A,0x0E8A48,0x80FFB8);
-  for(int i=0;i<16;i++){                       /* radiating burst */
-    float a=TAU*i/16.0f + 0.19f;
-    pt_t ray[3]={{U(46)+cosf(a)*U(14),U(45)+sinf(a)*U(14)},
-                 {U(46)+cosf(a+0.12f)*U(38),U(45)+sinf(a+0.12f)*U(38)},
-                 {U(46)+cosf(a-0.12f)*U(38),U(45)+sinf(a-0.12f)*U(38)}};
-    cv_poly(ray,3,0xFFF6B0,0x0E8A48,95);
-  }
-  pt_t p[10];
-  for(int i=0;i<10;i++){
-    float a=-TAU/4+TAU*i/10.0f;
-    float r=(i&1)?U(13.5f):U(32);
-    p[i].x=U(46)+cosf(a)*r; p[i].y=U(44)+sinf(a)*r;
-  }
-  cv_poly_outline(p,10,U(4.5f),0x160A00,255);
-  cv_poly_outline(p,10,U(2.0f),0xFFFFFF,255);
-  cv_polyN(p,10,gold,5,255);
-  cv_sphere(U(46),U(43),U(9.5f),0xB86A00,0xFFD24A,0xFFFFFF);
-  ribbon(74,54,"SCATTER",0xFFFFFF,0xB8E8C8,0x083A18);
+  cv_rays(U(46),U(42),U(12),U(38),16,0.19f,0xF4FFB0,110);
+  star3d(U(46),U(40),U(31),U(13),U(22));
+  cv_sparkle(U(46),U(10.5f),U(9),255);
+  cv_sparkle(U(73),U(31),U(5),200);
+  ribbon(71.5f,70,"SCATTER",0xE8FFE8,0x2AAA5A,0x02240E);
 }
 
 static void art_crown(void){
-  static const uint32_t gold[5]={0xFFFBE0,0xFFDE78,0xD8A01C,0x8E6208,0x503802};
   cv_medal(0x24044A,0x6A18B0,0xD898FF);
-  for(int i=0;i<14;i++){
-    float a=TAU*i/14.0f;
-    pt_t ray[3]={{U(46)+cosf(a)*U(16),U(44)+sinf(a)*U(16)},
-                 {U(46)+cosf(a+0.14f)*U(37),U(44)+sinf(a+0.14f)*U(37)},
-                 {U(46)+cosf(a-0.14f)*U(37),U(44)+sinf(a-0.14f)*U(37)}};
-    cv_poly(ray,3,0xF0C0FF,0x3A0060,70);
-  }
-  const float s=0.70f, ox=46, oy=44;
+  cv_rays(U(46),U(42),U(12),U(38),14,0.0f,0xF4D0FF,90);
+  const float s=0.72f, ox=46, oy=43;
   #define CP(px,py) {U(ox+((px)-46)*s),U(oy+((py)-48)*s)}
-  pt_t p[7]={CP(13,76),CP(79,76),CP(79,26),CP(63,47),CP(46,19),CP(29,47),CP(13,26)};
-  cv_poly_outline(p,7,U(5.0f*s),0x140C00,255);
-  cv_poly_outline(p,7,U(2.4f*s),0xFFF6C8,255);
-  cv_polyN(p,7,gold,5,255);
-  pt_t band[4]={CP(13,58),CP(79,58),CP(79,66),CP(13,66)};
-  static const uint32_t bg2[3]={0xFFFBE0,0xE8B830,0x8E6208};
-  cv_polyN(band,4,bg2,3,255);
-  cv_sphere(U(ox-17*s),U(oy+23*s),U(5.5f*s),0x4A0010,0xE02040,0xFFB0B8);
-  cv_sphere(U(ox),      U(oy+23*s),U(5.5f*s),0x003A14,0x18B048,0xB0FFC8);
-  cv_sphere(U(ox+17*s),U(oy+23*s),U(5.5f*s),0x001A4A,0x2060D8,0xB0D0FF);
-  cv_sphere(U(ox-33*s),U(oy-24*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
-  cv_sphere(U(ox),      U(oy-31*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
-  cv_sphere(U(ox+33*s),U(oy-24*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
+  /* velvet cap behind the points */
+  { pt_t v[8]={CP(16,54),CP(20,34),CP(32,26),CP(46,22),CP(60,26),CP(72,34),CP(76,54),CP(46,58)};
+    m_clear(cvm3); m_poly(cvm3,v,8);
+    static const uint32_t vel[3]={0xE0304A,0x9A0A22,0x4A0010};
+    mat_t vm=mat_candy(vel,3,5.0f); vm.spec=0.3f; vm.metal=0;
+    cv_shade(cvm3,&vm,255); }
+  pt_t p[7]={CP(12,76),CP(80,76),CP(82,24),CP(63,46),CP(46,14),CP(29,46),CP(10,24)};
+  m_clear(cvm3); m_poly(cvm3,p,7);
+  m_rrect(cvm3,U(ox-36*s),U(oy+(62-48)*s),U(72*s),U(16*s),U(3*s));
+  m_dilate(cvm3,cvm2,U(1.6f));
+  cv_fill_mask_at(cvm2,(int)U(0.8f),(int)U(1.6f),0x000000,120);
+  cv_fill_mask(cvm2,0x140C00,0x140C00,255);
+  mat_t g=mat_gold(3.4f);
+  cv_shade(cvm3,&g,255);
+  /* the band re-shaded as a rolled rim, then the jewels */
+  m_clear(cvm3); m_rrect(cvm3,U(ox-36*s),U(oy+(62-48)*s),U(72*s),U(16*s),U(3*s));
+  mat_t band={GOLDTURN,7,3.0f,0.7f,1,1.0f,30.0f,0,0,0,0,1.0f};
+  band.horiz=1;
+  cv_shade(cvm3,&band,255);
+  cv_gem(U(ox-19*s),U(oy+22*s),U(5.4f*s),0x4A0010,0xE02040,0xFFB0B8);
+  cv_gem(U(ox),      U(oy+22*s),U(6.0f*s),0x003A14,0x18B048,0xB0FFC8);
+  cv_gem(U(ox+19*s),U(oy+22*s),U(5.4f*s),0x001A4A,0x2060D8,0xB0D0FF);
+  cv_fruit(U(ox-36*s),U(oy-25*s),U(5*s),U(5*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
+  cv_fruit(U(ox),      U(oy-35*s),U(5.4f*s),U(5.4f*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
+  cv_fruit(U(ox+36*s),U(oy-25*s),U(5*s),U(5*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
   #undef CP
-  ribbon(75,44,"BONUS",0xF4D8FF,0x9A50D8,0x2A0448);
+  cv_sparkle(U(46),U(15),U(8),240);
+  ribbon(71.5f,52,"BONUS",0xF8E0FF,0x9A40E0,0x24043E);
 }
 
 static void art_jackpot(void){
   cv_medal(0x3A0000,0xB01414,0xFF7A60);
-  for(int i=0;i<12;i++){                       /* gold burst behind the coin */
-    float a=TAU*i/12.0f+0.26f;
-    pt_t ray[3]={{U(46)+cosf(a)*U(18),U(42)+sinf(a)*U(18)},
-                 {U(46)+cosf(a+0.11f)*U(38),U(42)+sinf(a+0.11f)*U(38)},
-                 {U(46)+cosf(a-0.11f)*U(38),U(42)+sinf(a-0.11f)*U(38)}};
-    cv_poly(ray,3,0xFFF0A0,0xB01414,90);
+  cv_rays(U(46),U(46),U(10),U(38),12,0.26f,0xFFF0A0,120);
+  static const uint32_t gl[5]={0xFFFCE8,0xFFE070,0xF0A818,0xB86A08,0x7A4204};
+  cv_label("JACK",U(46),U(34),U(3.15f),gl,5,0x2A0800,U(1.5f),2.2f);
+  cv_label("POT", U(46),U(59),U(3.15f),gl,5,0x2A0800,U(1.5f),2.2f);
+  cv_sparkle(U(22),U(24),U(8),240);
+  cv_sparkle(U(70),U(66),U(6),200);
+}
+
+/*  A holographic foil: the hue turns with the angle round the disc and
+ *  shifts with the radius, the way a rainbow foil does under a light. */
+static void cv_holo(float cx,float cy,float r,int alpha){
+  int x0=(int)(cx-r), x1=(int)(cx+r+1), y0=(int)(cy-r), y1=(int)(cy+r+1);
+  static const uint32_t hue[7]={0xFF4040,0xFFB020,0xF0FF40,0x40FF90,0x40D0FF,0x7050FF,0xFF40D0};
+  for(int y=y0;y<y1;y++) for(int x=x0;x<x1;x++){
+    float dx=x+0.5f-cx, dy=y+0.5f-cy, d=sqrtf(dx*dx+dy*dy);
+    if(d>r) continue;
+    float h=fast_atan2(dy,dx)/TAU+0.5f+d/r*0.35f;
+    h-=floorf(h);
+    float f=h*7.0f; int i=(int)f; if(i>6) i=6;
+    uint32_t c=mixc(hue[i],hue[(i+1)%7],f-i);
+    float band=0.55f+0.45f*sinf(d/r*14.0f+fast_atan2(dy,dx)*2.0f);
+    cv_px(x,y,c,(int)(alpha*band));
   }
-  cv_circle(U(47),U(44),U(25),0x000000,0x000000,120);
-  cv_sphere(U(46),U(42),U(24.5f),0x7A4A00,0xF2B622,0xFFF6C0);            /* the coin */
-  cv_circle(U(46),U(42),U(20),0x8A5A08,0x8A5A08,110);                     /* milled rim */
-  cv_circle(U(46),U(42),U(18.5f),0xFFD860,0xE0A020,255);
-  cv_text("$",U(46.8f),U(42.8f),U(4.6f),0x5A3400,255);
-  cv_text("$",U(46),U(42),U(4.6f),0xFFF8D0,255);
-  ribbon(75,58,"JACKPOT",0xFFE9A8,0xC08A10,0x3A1400);
 }
 
 static void art_ult(void){
-  static const uint32_t body[5]={0xFFC4A8,0xFF6A4A,0xE81C2C,0x9A0C1A,0x54060E};
-  cv_medal(0x1C1C2E,0x8A8CA8,0xFFFFFF);
-  /* rainbow sheen: twelve translucent wedges around the disc */
-  static const uint32_t hue[12]={0xFF3030,0xFF8A20,0xFFE020,0x80FF30,0x20FF80,0x20FFE0,
-                                 0x2090FF,0x4040FF,0x9030FF,0xE030FF,0xFF30A0,0xFF3060};
-  for(int i=0;i<12;i++){
-    float a0=TAU*i/12.0f, a1=TAU*(i+1)/12.0f;
-    pt_t w[4]={{U(46),U(46)},{U(46)+cosf(a0)*U(38),U(46)+sinf(a0)*U(38)},
-               {U(46)+cosf((a0+a1)*0.5f)*U(38.6f),U(46)+sinf((a0+a1)*0.5f)*U(38.6f)},
-               {U(46)+cosf(a1)*U(38),U(46)+sinf(a1)*U(38)}};
-    cv_poly(w,4,hue[i],hue[i],70);
-  }
-  cv_ellipse(U(46),U(31),U(27),U(12),0xFFFFFF,0xFFFFFF,70);
-  (void)body;
+  cv_medal(0x10101E,0x505470,0xE8ECFF);
+  cv_holo(U(46),U(46),U(37.5f),96);
+  cv_rays(U(46),U(46),U(10),U(38),16,0.0f,0xFFFFFF,70);
   /* one platinum seven, so it cannot be mistaken for the red wild */
-  static const uint32_t plat[5]={0xFFFFFF,0xEAF6FF,0x9CCCF0,0x3C7CB0,0x123A5C};
-  seven_shape(46,52,0.60f,plat,5,1);
+  static const uint32_t plat[5]={0xFFFFFF,0xE4F2FF,0x9CC8F0,0x4A80B8,0x1A3A60};
+  seven_shape(46,51,0.60f,plat,5,1);
   /* a small gold crown perched on top */
-  { static const uint32_t gold[5]={0xFFFBE0,0xFFDE78,0xD8A01C,0x8E6208,0x503802};
-    const float s=0.30f, ox=46, oy=19;
+  { const float s=0.30f, ox=46, oy=18.5f;
     #define UP(px,py) {U(ox+((px)-46)*s),U(oy+((py)-48)*s)}
     pt_t p[7]={UP(13,76),UP(79,76),UP(79,26),UP(63,47),UP(46,19),UP(29,47),UP(13,26)};
-    cv_poly_outline(p,7,U(4.0f*s),0x140C00,255);
-    cv_poly_outline(p,7,U(2.0f*s),0xFFF6C8,255);
-    cv_polyN(p,7,gold,5,255);
-    cv_sphere(U(ox-33*s),U(oy-24*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
-    cv_sphere(U(ox),      U(oy-31*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
-    cv_sphere(U(ox+33*s),U(oy-24*s),U(5*s),0x8E6208,0xE8C040,0xFFF8D0);
+    m_clear(cvm3); m_poly(cvm3,p,7);
+    m_dilate(cvm3,cvm2,U(1.2f));
+    cv_fill_mask(cvm2,0x140C00,0x140C00,255);
+    mat_t g=mat_gold(1.6f);
+    cv_shade(cvm3,&g,255);
+    cv_fruit(U(ox-33*s),U(oy-24*s),U(5*s),U(5*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
+    cv_fruit(U(ox),      U(oy-31*s),U(5*s),U(5*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
+    cv_fruit(U(ox+33*s),U(oy-24*s),U(5*s),U(5*s),0x8E6208,0xF0D060,0xFFFCE8,0xFFD060,0,0,0);
     #undef UP
   }
-  ribbon(79,60,"ULTIMATE",0xFFFFFF,0xB8C8FF,0x101838);
+  cv_sparkle(U(62),U(34),U(9),255);
+  ribbon(74.5f,78,"ULTIMATE",0xFFFFFF,0x9AB0F0,0x0A1030);
 }
 
 /* ── uniform outer contour ─────────────────────────────────────────
@@ -1304,42 +2066,138 @@ static void bake_shadow(spr_t*s,int ox,int oy,int rad,int alpha){
 }
 
 
+/*  A light unsharp mask over the solid interior of a sprite.  The 4x
+ *  box filter that makes the edges clean also softens every detail
+ *  inside them; this puts the snap back without touching the silhouette. */
+static void spr_sharpen(spr_t*s,float k){
+  if(!s->px) return;
+  int w=s->w, h=s->h;
+  uint8_t*o=(uint8_t*)malloc((size_t)w*h*4);
+  if(!o) return;
+  memcpy(o,s->px,(size_t)w*h*4);
+  for(int y=1;y<h-1;y++) for(int x=1;x<w-1;x++){
+    const uint8_t*p=s->px+((size_t)y*w+x)*4;
+    const uint8_t*l=p-4,*r=p+4,*u=p-w*4,*d=p+w*4;
+    if(p[3]<255||l[3]<255||r[3]<255||u[3]<255||d[3]<255) continue;
+    for(int c=0;c<3;c++){
+      float v=p[c]+k*(4.0f*p[c]-l[c]-r[c]-u[c]-d[c])*0.25f;
+      o[((size_t)y*w+x)*4+c]=(uint8_t)clampi((int)(v+0.5f),0,255);
+    }
+  }
+  free(s->px); s->px=o;
+}
+
+/*  What a reel at speed shows.  A plain vertical average turns a symbol
+ *  to mush; film smears the highlights into streaks instead, so each
+ *  column carries some of the brightest thing that passed through it.
+ *  The sprite grows by the blur length top and bottom so the smear runs
+ *  on into the neighbours, as it does on a real drum.                  */
+#define BLURPAD 14
+static void make_streak(const spr_t*src,spr_t*dst,int K,float keep,int fade){
+  int w=src->w, h=src->h+BLURPAD*2;
+  dst->w=w; dst->h=h;
+  dst->px=(uint8_t*)calloc((size_t)w*h,4);
+  if(!dst->px) return;
+  for(int x=0;x<w;x++) for(int y=0;y<h;y++){
+    float r=0,g=0,b=0,a=0,wsum=0; int best=-1, bl=-1;
+    for(int k=-K;k<=K;k++){
+      int yy=y-BLURPAD+k;
+      float wt=1.0f-fabsf((float)k)/(K+1);
+      wsum+=wt;
+      if(yy<0||yy>=src->h) continue;
+      const uint8_t*p=src->px+((size_t)yy*w+x)*4;
+      if(!p[3]) continue;
+      r+=p[0]*p[3]*wt; g+=p[1]*p[3]*wt; b+=p[2]*p[3]*wt; a+=p[3]*wt;
+      int lum=p[0]*3+p[1]*6+p[2];
+      if(p[3]>200 && lum>bl){ bl=lum; best=yy; }
+    }
+    if(a<=0) continue;
+    uint8_t*o=dst->px+((size_t)y*w+x)*4;
+    uint32_t c=RGB((int)(r/a),(int)(g/a),(int)(b/a));
+    if(best>=0){
+      const uint8_t*p=src->px+((size_t)best*w+x)*4;
+      c=mixc(c,RGB(p[0],p[1],p[2]),keep);
+    }
+    o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+    o[3]=(uint8_t)clampi((int)(a/wsum*fade/255.0f),0,255);
+  }
+  spr_bounds(dst);
+}
+
 /* build the crisp sprites, their motion-blurred twins, and the glow */
 static void art_coin(void);     /* w7_hold.c  */
 static void art_wheel(void);    /* w7_wheel.c */
+#define NFLAME 4
+static spr_t symfl[NFLAME];    /* the wild with its flames at four phases */
+static spr_t symb2[NSYM];      /* the long streak, reel at full speed    */
+static spr_t pickEmblem;       /* a red 7 on a gold medal: the pick panels */
+
+/*  The same canvas resolved at twice the size, for the attract loop's
+ *  close-ups: sharper than magnifying the 106px sprite, and a plain blit
+ *  at run time rather than a scaled one.                              */
+static void cv_resolve2(spr_t*s){
+  const int K=SS/2, W=CANW/K, H=CANH/K;
+  s->w=W; s->h=H;
+  s->px=(uint8_t*)calloc((size_t)W*H,4);
+  if(!s->px){ s->w=s->h=0; return; }
+  for(int y=0;y<H;y++) for(int x=0;x<W;x++){
+    int r=0,g=0,b=0,a=0;
+    for(int j=0;j<K;j++) for(int i=0;i<K;i++){
+      uint8_t*p=canvas+(((y*K+j)*CANW)+(x*K+i))*4;
+      int pa=p[3];
+      r+=p[0]*pa; g+=p[1]*pa; b+=p[2]*pa; a+=pa;
+    }
+    uint8_t*o=s->px+((size_t)y*W+x)*4;
+    if(a>0){ o[0]=(uint8_t)(r/a); o[1]=(uint8_t)(g/a); o[2]=(uint8_t)(b/a); }
+    o[3]=(uint8_t)(a/(K*K));
+  }
+}
+static spr_t symBig[NSYM];     /* double-size close-ups, feature symbols only */
+
+static void render_symbol(spr_t*s,void(*art)(void),int glass,int idx){
+  cv_clear(); art();
+  if(glass) cv_glass();
+  if(idx>=0 && idx<NSYM && (idx==SY_SEVEN||idx>=SY_STAR)){
+    cv_resolve2(&symBig[idx]);
+    spr_sharpen(&symBig[idx],0.4f);
+    add_contour(&symBig[idx], SYMW/15, 0x0A0510, 255);
+    spr_bounds(&symBig[idx]);
+  }
+  cv_resolve(s);
+  spr_sharpen(s,0.55f);
+  add_contour(s, SYMW/30, 0x0A0510, 255);   /* hard dark edge */
+  spr_bounds(s);
+}
+
 static void build_sprites(void){
   void(*art[NSYM])(void) = { art_seven,art_diamond,art_bell,art_bar,art_grapes,
                              art_orange,art_plum,art_cherry,art_lemon,
                              art_star,art_crown,art_jackpot,art_ult,
                              art_coin,art_wheel };
-  for(int i=0;i<NSYM;i++){
-    cv_clear(); art[i](); cv_resolve(&sym[i]);
-    add_contour(&sym[i], SYMW/30, 0x0A0510, 255);   /* hard dark edge */
-    spr_bounds(&sym[i]);
+  /* the coin and wheel belong to their modules, which light their own */
+  for(int i=0;i<NSYM;i++) render_symbol(&sym[i],art[i],i!=SY_COIN && i!=SY_WHEEL,i);
+  for(int k=0;k<NFLAME;k++){
+    flamePhase=0.19f+k*0.23f;
+    render_symbol(&symfl[k],art_seven,1,-1);
   }
-  /* vertical box blur -> what you see while the reel is at speed.  Built
-     from the un-shadowed art, so before the shadow is baked in.       */
+  flamePhase=0.0f;
+  { static const uint32_t red[5]={0xFF8A70,0xFF3A28,0xE0101C,0x980614,0x4A020A};
+    cv_clear(); cv_medal(0x6A4206,0xE8B03A,0xFFF4C8);
+    cv_rays(U(46),U(46),U(10),U(38),12,0.1f,0xFFFFFF,60);
+    seven_shape(46,48,0.68f,red,5,1);
+    cv_glass(); cv_resolve(&pickEmblem); spr_sharpen(&pickEmblem,0.55f);
+    add_contour(&pickEmblem,SYMW/30,0x0A0510,255); spr_bounds(&pickEmblem);
+    bake_shadow(&pickEmblem,SYMW/25,SYMH/20,4,200); }
+  /* the smears are built from the un-shadowed art, before the shadow is
+     baked in: a moving symbol does not cast a crisp shadow */
   for(int i=0;i<NSYM;i++){
-    symb[i].w=SYMW; symb[i].h=SYMH;
-    symb[i].px=(uint8_t*)calloc(SYMW*SYMH,4);
-    if(!symb[i].px) continue;
-    const int K=7;
-    for(int x=0;x<SYMW;x++) for(int y=0;y<SYMH;y++){
-      int r=0,g=0,b=0,a=0,n=0;
-      for(int k=-K;k<=K;k++){
-        int yy=y+k; if(yy<0||yy>=SYMH) continue;
-        const uint8_t*p=sym[i].px+(yy*SYMW+x)*4;
-        r+=p[0]*p[3]; g+=p[1]*p[3]; b+=p[2]*p[3]; a+=p[3]; n++;
-      }
-      uint8_t*o=symb[i].px+(y*SYMW+x)*4;
-      if(a>0){ o[0]=(uint8_t)(r/a); o[1]=(uint8_t)(g/a); o[2]=(uint8_t)(b/a); }
-      o[3]=(uint8_t)(n? (a/n)*4/5 : 0);
-    }
-    spr_bounds(&symb[i]);
+    make_streak(&sym[i],&symb[i], 7,0.22f,225);
+    make_streak(&sym[i],&symb2[i],13,0.34f,222);
   }
   /* cast shadows are composited straight into the symbol sprites: same
      look, half the per-frame blits */
   for(int i=0;i<NSYM;i++) bake_shadow(&sym[i], SYMW/25, SYMH/20, 4, 200);
+  for(int k=0;k<NFLAME;k++) bake_shadow(&symfl[k], SYMW/25, SYMH/20, 4, 200);
 
   /* radial alpha mask for the cell washes */
   #define WASHR ((int)(CW*0.58f))
@@ -2144,6 +3002,7 @@ static int force_demand(int r,int*symo,int*rows){
 static inline int cellcx(int r);
 static inline int cellcy(int row);
 static void flash_btn(int i);
+static void art_update(void);
 
 static void update(void){
   G.t += DT;
@@ -2154,6 +3013,7 @@ static void update(void){
   if(G.multUp>0) G.multUp -= DT;
   update_parts();
   fx_update();
+  art_update();                 /* cosmetic clocks and caches, w/ the art */
 
   /* ---- reels ---- */
   float spinv = opt_turbo?20.0f:13.0f;      /* half the old speed */
@@ -2498,93 +3358,526 @@ static int seg_num(long long v,int rx,int y,int ndig,float w,float h,
   return (int)((float)rx-x);
 }
 
-/*  A black inset window for a readout to sit in.                      */
-static void led_window(int x,int y,int w,int h){
-  fb_rrect(x,y,w,h,7,0x000000,255);
-  fb_rframe(x,y,w,h,7,2.0f,0x2A2E38,255);
-  for(int j=0;j<5;j++){                                   /* inner shade */
-    int a=(5-j)*22;
-    for(int i=0;i<w;i++) fb_blend(x+i,y+j,0x000000,a);
+/* ═══ CABINET MATERIALS (init time, straight into the framebuffer) ═══
+ *  The same studio the symbols reflect, applied to the cabinet: metal
+ *  mouldings with a half-round profile, tinted glass over the backdrop,
+ *  and lit plastic.  All of this is painted once into the background;
+ *  nothing here runs per frame.
+ * ================================================================= */
+
+/*  A metal moulding round a rounded rectangle, t pixels wide.  Across
+ *  its width the profile is a half-round, so the normal sweeps from the
+ *  inner edge to the outer one and the moulding picks up the studio's
+ *  hard horizon line the way a chrome trim strip does.               */
+static void fb_moulding(int x,int y,int w,int h,float r,float t,int kind,int alpha){
+  float cx=x+w*0.5f, cy=y+h*0.5f, hw=w*0.5f, hh=h*0.5f;
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ);
+  float hx=LX/ll, hy=LY/ll, hz=LZ/ll+1.0f, hl=sqrtf(hx*hx+hy*hy+hz*hz);
+  hx/=hl; hy/=hl; hz/=hl;
+  int band=(int)(t+r+2.0f);
+  for(int j=0;j<h;j++){
+    int py=y+j;
+    if(py<0||py>=FBH) continue;
+    int mid=(j>band && j<h-band);
+    for(int i=0;i<w;i++){
+      if(mid && i>(int)t+2 && i<w-(int)t-3){ i=w-(int)t-3; continue; }
+      float px=x+i+0.5f, pyf=py+0.5f;
+      float d=rr_sdf(px,pyf,cx,cy,hw,hh,r);
+      if(d>0.6f || d<-t-0.6f) continue;
+      float cov=clampf(0.5f-d,0,1)*clampf(d+t+0.5f,0,1);
+      float u=clampf((d+t*0.5f)/(t*0.5f),-1,1);
+      float gx=rr_sdf(px+0.5f,pyf,cx,cy,hw,hh,r)-rr_sdf(px-0.5f,pyf,cx,cy,hw,hh,r);
+      float gy=rr_sdf(px,pyf+0.5f,cx,cy,hw,hh,r)-rr_sdf(px,pyf-0.5f,cx,cy,hw,hh,r);
+      float gl=sqrtf(gx*gx+gy*gy);
+      if(gl<1e-4f){ gx=0; gy=-1; gl=1; }
+      gx/=gl; gy/=gl;
+      float nr=u*0.93f, nz=sqrtf(1.0f-nr*nr), nx=gx*nr, ny=gy*nr;
+      uint32_t c=env_map(env_up(nx,ny,nz),kind);
+      float sd=nx*hx+ny*hy+nz*hz;
+      float sp=ipow(clampf(sd,0,1),50);
+      c=mixc(c,0xFFFFFF,sp*0.8f);
+      fb_blend(x+i,py,c,(int)(cov*alpha));
+    }
   }
-  for(int j=0;j<h;j+=3)                                   /* faint raster */
-    for(int i=0;i<w;i++) fb_blend(x+i,y+j,0x000000,40);
 }
 
-/*  Moulded keycap: light top face, shaded sides, engraved label.      */
+/* a soft shadow under a panel: stacked rounded rects, init only */
+static void fb_softshadow(int x,int y,int w,int h,float r,int spread,int alpha){
+  for(int k=spread;k>=1;k--)
+    fb_rrect(x-k,y-k+spread/2,w+2*k,h+2*k,r+k,0x000000,alpha/spread+2);
+}
+
+/*  Tinted glass: it darkens and colours what is behind it rather than
+ *  hiding it, catches a soft reflection across its top, and has a thin
+ *  bright edge where the light enters the glass.                     */
+static void fb_glass(int x,int y,int w,int h,float r,uint32_t top,uint32_t bot,int alpha){
+  fb_rrectg(x,y,w,h,r,top,bot,alpha);
+  float cx=x+w*0.5f, cy=y+h*0.5f;
+  int rh=(int)(h*0.42f); if(rh>60) rh=60;
+  for(int j=0;j<rh;j++){
+    float f=1.0f-(float)j/rh; f=f*f;
+    for(int i=0;i<w;i++){
+      float d=rr_sdf(x+i+0.5f,y+j+0.5f,cx,cy,w*0.5f,h*0.5f,r);
+      if(d>-1.0f) continue;
+      fb_blend(x+i,y+j,0xFFFFFF,(int)(f*22.0f));
+    }
+  }
+  /* a diagonal sheen, the kind a light bar leaves on a glass front */
+  for(int j=0;j<h;j++){
+    int xs=x+(int)(w*0.62f)-j/2;
+    for(int k=0;k<28;k++){
+      int xx=xs+k;
+      if(xx<x+4||xx>=x+w-4) continue;
+      float d=rr_sdf(xx+0.5f,y+j+0.5f,cx,cy,w*0.5f,h*0.5f,r);
+      if(d>-2.0f) continue;
+      fb_blend(xx,y+j,0xFFFFFF,(int)(7.0f*sinf(k/28.0f*3.14159f)));
+    }
+  }
+  fb_rframe(x+1,y+1,w-2,h-2,r-1,1.0f,0xFFFFFF,34);
+}
+
+/*  A black inset window for a readout to sit in: smoked glass sunk
+ *  into the panel, darker at the top where the lip shades it, with a
+ *  thin bright bevel on the lower edge where the light catches.      */
+static void led_window(int x,int y,int w,int h){
+  fb_rrect(x,y,w,h,7,0x000000,255);
+  fb_rrectg(x+2,y+2,w-4,h-4,6,0x05060A,0x0C0E16,255);
+  for(int j=0;j<6;j++){                                   /* inner shade */
+    int a=(6-j)*24;
+    for(int i=3;i<w-3;i++) fb_blend(x+i,y+2+j,0x000000,a);
+  }
+  for(int j=3;j<h-3;j+=3)                                 /* faint raster */
+    for(int i=3;i<w-3;i++) fb_blend(x+i,y+j,0x000000,50);
+  fb_rframe(x,y,w,h,7,1.5f,0x3A3E4C,255);
+  for(int i=8;i<w-8;i++) fb_blend(x+i,y+h-2,0x9AA2B8,90);   /* lower lip catches light */
+  for(int i=10;i<w*0.55f;i++) fb_blend(x+i,y+4,0xFFFFFF,14);  /* glass glint */
+}
+
+/*  Moulded keycap: light top face, shaded sides, engraved label.  It is
+ *  drawn live by the ADD CREDITS chooser, so it stays on the cheap
+ *  primitives; the deck buttons are baked richer below.             */
 static void keycap(int x,int y,int w,int h,const char*l1,const char*l2,
                    int pressed,uint32_t face){
   int dy = pressed?3:0;
   fb_rrect(x+2,y+6,w,h,10,0x000000,190);                  /* cast shadow */
-  if(!pressed){                                            /* body side  */
-    fb_rrectg(x,y+dy+4,w,h,10,scalec(face,0.42f),scalec(face,0.28f),255);
-  }
+  if(!pressed)                                             /* body side  */
+    fb_rrectg(x,y+dy+4,w,h,10,scalec(face,0.42f),scalec(face,0.22f),255);
   fb_rrectg(x,y+dy,w,h-(pressed?0:4),10,
-            mixc(face,0xFFFFFF,0.34f),scalec(face,0.72f),255);
+            mixc(face,0xFFFFFF,0.40f),scalec(face,0.70f),255);
   for(int j=0;j<h/3;j++){                                  /* top gloss  */
-    int a=(h/3-j)*3;
-    for(int i=5;i<w-5;i++) fb_blend(x+i,y+dy+2+j,0xFFFFFF,a);
+    int a=(h/3-j)*4;
+    for(int i=6;i<w-6;i++) fb_blend(x+i,y+dy+2+j,0xFFFFFF,a);
   }
-  fb_rframe(x,y+dy,w,h-(pressed?0:4),10,1.5f,scalec(face,0.35f),200);
+  fb_rframe(x,y+dy,w,h-(pressed?0:4),10,1.5f,scalec(face,0.30f),220);
+  fb_rframe(x+2,y+dy+2,w-4,h-(pressed?4:8),8,1.0f,0xFFFFFF,70);
   int ty = y+dy+(l2? h/2-16 : h/2-11);
   text(l1,x+w/2,ty,2,0x14141C,1,0);
   if(l2) text(l2,x+w/2,ty+18,2,0x14141C,1,0);
 }
 
-/*  The big domed SPIN button.  The lighting model runs once per state
- *  at init — evaluating a power function per pixel every frame cost
- *  more than the reels did.                                           */
+/* ── additive sprites: glows, halos, bulbs ─────────────────────────
+ *  A glow sprite holds its light premultiplied in RGB.  blit_add adds it
+ *  scaled by k/256, clipped to the band being drawn.                  */
+static void blit_add(const spr_t*s,int dx,int dy,int k){
+  if(!s->px||k<=0) return;
+  int y0=0, y1=s->h;
+  if(dy+y0<clip_y0) y0=clip_y0-dy;
+  if(dy+y1>clip_y1) y1=clip_y1-dy;
+  for(int y=y0;y<y1;y++){
+    int fy=dy+y;
+    if((unsigned)fy>=FBH) continue;
+    int xa=s->rx0?s->rx0[y]:0, xb=s->rx1?s->rx1[y]:s->w-1;
+    if(dx+xa<0) xa=-dx;
+    if(dx+xb>=FBW) xb=FBW-1-dx;
+    const uint8_t*row=s->px+(size_t)y*s->w*4;
+    uint32_t*dst=fb+(size_t)fy*FBW+dx;
+    for(int x=xa;x<=xb;x++){
+      const uint8_t*p=row+x*4;
+      if(!p[3]) continue;
+      uint32_t d=dst[x];
+      int r=((d>>16)&255)+((p[0]*k)>>8), g=((d>>8)&255)+((p[1]*k)>>8), b=(d&255)+((p[2]*k)>>8);
+      dst[x]=RGB(r>255?255:r,g>255?255:g,b>255?255:b);
+    }
+  }
+}
+/* a round glow of radius r, colour col, falling off as (1-d)^p */
+static void make_glow(spr_t*s,int r,uint32_t col,float p,float core){
+  s->w=s->h=r*2+1;
+  s->px=(uint8_t*)calloc((size_t)s->w*s->h,4);
+  if(!s->px) return;
+  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+  for(int y=0;y<s->h;y++) for(int x=0;x<s->w;x++){
+    float dx=(x-r)/(float)r, dy=(y-r)/(float)r, d=sqrtf(dx*dx+dy*dy);
+    if(d>=1.0f) continue;
+    float v=powf(1.0f-d,p)+core*powf(clampf(1.0f-d*3.0f,0,1),2.0f);
+    v=clampf(v,0,1);
+    uint8_t*o=s->px+((size_t)y*s->w+x)*4;
+    o[0]=(uint8_t)(cr*v); o[1]=(uint8_t)(cg*v); o[2]=(uint8_t)(cb*v);
+    o[3]=(uint8_t)(v>0.004f?255:0);
+  }
+  spr_bounds(s);
+}
+/* copy a rectangle of the framebuffer out as an opaque sprite */
+static void grab_sprite(spr_t*s,int x,int y,int w,int h){
+  s->w=w; s->h=h;
+  s->px=(uint8_t*)malloc((size_t)w*h*4);
+  if(!s->px) return;
+  for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+    uint32_t c=((unsigned)(x+i)<FBW&&(unsigned)(y+j)<FBH)?fb[(y+j)*FBW+x+i]:0;
+    uint8_t*o=s->px+((size_t)j*w+i)*4;
+    o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255); o[3]=255;
+  }
+  spr_bounds(s);
+}
+
+static spr_t domehalo;         /* the SPIN dome's idle glow            */
+static spr_t bulbspr[2];       /* marquee bulbs: warm, and red         */
+static spr_t sparkspr;         /* a small hot glint                    */
+static spr_t btnspr[5][2];     /* deck buttons: at rest, and lit       */
+
+/*  The big domed SPIN button: translucent green plastic lit from
+ *  inside, a hard window reflection, a thick chrome bezel.  Two states,
+ *  both baked; the glow round it is a separate additive sprite.      */
 static void build_dome(int which){
   int r=SPINR, w=r*2+16, h=r*2+16, cx=w/2, cy=h/2;
   spr_t*sp=&domespr[which];
   sp->w=w; sp->h=h;
   sp->px=(uint8_t*)calloc((size_t)w*h,4);
   if(!sp->px) return;
-  int pressed = which;
-  for(int j=-r;j<=r;j++) for(int i=-r;i<=r;i++){
-    if(i*i+j*j>r*r) continue;
-    float nx=i/(float)r, ny=j/(float)r;
-    float nz=sqrtf(fmaxf(0.0f,1.0f-nx*nx-ny*ny));
-    float lam=clampf(nx*-0.45f + ny*-0.55f + nz*0.70f,0,1);
-    float spec=powf(clampf(nx*-0.42f+ny*-0.52f+nz*0.74f,0,1),22.0f);
-    uint32_t base = pressed?0x0E7A22:0x14A62E;
-    uint32_t c = mixc(scalec(base,0.30f), mixc(base,0xC8FF9A,0.55f), lam);
-    c = mixc(c,0xFFFFFF,spec*0.92f);
-    uint8_t*o=sp->px+(((size_t)(cy+j))*w+(cx+i))*4;
-    o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255);
-    o[2]=(uint8_t)(c&255);       o[3]=255;
-  }
-  /* chrome ring */
-  for(int k=0;k<3;k++){
-    int rr=r+2+k;
-    for(int a=0;a<900;a++){
-      float th2=a*(TAU/900.0f);
-      float v=0.45f+0.55f*(0.5f+0.5f*cosf(th2+2.3f));
-      int x=cx+(int)(cosf(th2)*rr), y=cy+(int)(sinf(th2)*rr);
-      if((unsigned)x>=(unsigned)w||(unsigned)y>=(unsigned)h) continue;
-      uint32_t c=mixc(0x4A5060,0xF0F4FF,v);
-      uint8_t*o=sp->px+(((size_t)y)*w+x)*4;
-      o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255);
-      o[2]=(uint8_t)(c&255);       o[3]=235;
+  int pressed=which;
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  const int S2=3;                                   /* 3x3 supersample */
+  for(int y=0;y<h;y++) for(int x=0;x<w;x++){
+    int rs=0,gs=0,bs=0,as=0;
+    for(int sy=0;sy<S2;sy++) for(int sx=0;sx<S2;sx++){
+      float fx=x+(sx+0.5f)/S2-cx, fy=y+(sy+0.5f)/S2-cy, d=sqrtf(fx*fx+fy*fy);
+      uint32_t c; int a=255;
+      if(d<=r-1.0f){
+        float nx=fx/r, ny=fy/r, nz=sqrtf(fmaxf(0.0f,1.0f-nx*nx-ny*ny));
+        float lam=clampf(nx*lx+ny*ly+nz*lz,0,1);
+        uint32_t base=pressed?0x10C838:0x14A62E;
+        /* lit from inside: brightest in the middle, deep at the rim */
+        float core=1.0f-d/r;
+        c=mixc(scalec(base,0.32f),mixc(base,0xB8FF90,0.45f),clampf(core*1.1f,0,1));
+        c=mixc(c,mixc(base,0xFFFFFF,0.2f),lam*0.35f);
+        /* hard window reflection across the top */
+        float wx=nx/0.72f, wy=(ny+0.42f)/0.34f;
+        if(wx*wx+wy*wy<1.0f && ny<-0.12f) c=mixc(c,0xFFFFFF,0.55f*(1.0f-(ny+0.95f)*0.9f));
+        float spec=powf(clampf(nx*-0.42f+ny*-0.52f+nz*0.74f,0,1),40.0f);
+        c=mixc(c,0xFFFFFF,spec*0.9f);
+        /* rim light low right */
+        float rl=smooth01(0.7f,1.0f,d/r)*clampf((nx*0.5f+ny*0.86f),0,1);
+        c=mixc(c,0xC8FFB0,rl*0.5f);
+      } else if(d<=r+6.0f){
+        float t=clampf((d-(r+2.5f))/3.5f,-1,1);
+        float nr=t*0.93f, nz=sqrtf(1.0f-nr*nr);
+        float nx=fx/d*nr, ny=fy/d*nr;
+        c=env_map(env_up(nx,ny,nz),0);
+        if(d>r+5.0f) a=(int)(255*clampf(r+6.0f-d,0,1));
+      } else { a=0; c=0; }
+      rs+=((c>>16)&255)*a; gs+=((c>>8)&255)*a; bs+=(c&255)*a; as+=a;
     }
+    if(!as) continue;
+    uint8_t*o=sp->px+((size_t)y*w+x)*4;
+    o[0]=(uint8_t)(rs/as); o[1]=(uint8_t)(gs/as); o[2]=(uint8_t)(bs/as); o[3]=(uint8_t)(as/(S2*S2));
   }
   spr_bounds(sp);
+  if(!which) make_glow(&domehalo,SPINR+30,0x60FF70,2.2f,0.0f);
 }
 
 static void spin_dome(int cx,int cy,int r,int pressed,float pulse){
   const spr_t*sp=&domespr[pressed?1:0];
   if(!sp->px) return;
+  if(pulse>0.0f) blit_add(&domehalo,cx-domehalo.w/2,cy-domehalo.h/2,(int)(60+170*pulse));
   blit(sp,cx-sp->w/2,cy-sp->h/2,0,FBH,255,0,0.0f);
   if(pulse>0.0f){
-    int rr=r+6;
-    for(int a=0;a<720;a++){
-      float th2=a*(TAU/720.0f);
+    int rr=r+9;
+    for(int a=0;a<360;a++){
+      float th2=a*(TAU/360.0f);
       fb_blend(cx+(int)(cosf(th2)*rr),cy+(int)(sinf(th2)*rr),
-               0xDFFFC0,(int)(150*pulse));
+               0xDFFFC0,(int)(170*pulse));
     }
   }
   text("SPIN",cx,cy-12,3,0x05240A,1,0);
   text("SPIN",cx,cy-13,3,0xFFFFFF,1,0);
   text("PRESS",cx,cy+12,1,0xDDFFC8,1,1);
+}
+
+/* ═══ TITLES ═══════════════════════════════════════════════════════
+ *  The words that sell the machine - the logo, FREE SPINS, the bonus
+ *  banners - are baked once into sprites with the full treatment: a
+ *  coloured neon glow, a cast shadow, a dark keyline and a bevelled,
+ *  mirror-finished face.  At run time they are only blitted (or scaled,
+ *  for a zoom), which costs a fraction of drawing the bubble type live.
+ * ================================================================= */
+typedef struct {
+  const uint32_t*ramp; int nr;   /* face colour, top to bottom of the caps */
+  uint32_t line;                 /* keyline                                */
+  uint32_t glow; float glowAmt;  /* neon halo                              */
+  int glowR;                     /* halo radius, screen pixels             */
+  int env;                       /* what the bevel reflects: 0 chrome 1 gold */
+  float metal;
+} tstyle_t;
+
+static void box_blur_f(float*f,float*tmp,int W,int H,int r,int passes){
+  float inv=1.0f/(2*r+1);
+  for(int p=0;p<passes;p++){
+    for(int y=0;y<H;y++){
+      float*row=f+(size_t)y*W, *dst=tmp+(size_t)y*W, acc=0;
+      for(int x=0;x<=r && x<W;x++) acc+=row[x];
+      for(int x=0;x<W;x++){
+        dst[x]=acc*inv;
+        if(x+r+1<W) acc+=row[x+r+1];
+        if(x-r>=0)  acc-=row[x-r];
+      }
+    }
+    for(int x=0;x<W;x++){
+      float acc=0;
+      for(int y=0;y<=r && y<H;y++) acc+=tmp[(size_t)y*W+x];
+      for(int y=0;y<H;y++){
+        f[(size_t)y*W+x]=acc*inv;
+        if(y+r+1<H) acc+=tmp[(size_t)(y+r+1)*W+x];
+        if(y-r>=0)  acc-=tmp[(size_t)(y-r)*W+x];
+      }
+    }
+  }
+}
+
+static void bake_title(spr_t*o,const char*s,int px,const tstyle_t*ts){
+  const int K=px>=8?1:2;              /* supersample the small ones only */
+  int n=(int)strlen(s);
+  float P=(float)(px*K);
+  int pad=ts->glowR*K*2+(int)(P*1.3f)+6;
+  int W=(int)((n*6-1)*P)+pad*2, H=(int)(7*P)+pad*2;
+  size_t N=(size_t)W*H;
+  uint8_t*fill=(uint8_t*)calloc(N,1), *outl=(uint8_t*)calloc(N,1);
+  float*hf=(float*)malloc(N*4), *tmp=(float*)malloc(N*4), *gl=(float*)malloc(N*4), *acc=(float*)calloc(N*4,4);
+  memset(o,0,sizeof *o);
+  if(!fill||!outl||!hf||!tmp||!gl||!acc){ free(fill); free(outl); free(hf); free(tmp); free(gl); free(acc); return; }
+  float Rin=P*0.62f, Rout=Rin+P*0.30f+K*1.2f;
+  for(int i=0;i<n;i++){
+    int ch=(unsigned char)s[i];
+    if(ch>='a'&&ch<='z') ch-=32;
+    if(ch<32||ch>127) ch='?';
+    const uint8_t*g=FONT[ch-32];
+    #define SETT(rr,cc) ((rr)>=0&&(rr)<7&&(cc)>=0&&(cc)<5 && (g[rr]&(0x10>>(cc))))
+    for(int r=0;r<7;r++) for(int c=0;c<5;c++){
+      if(!SETT(r,c)) continue;
+      float x=pad+i*6*P+c*P+P*0.5f, y=pad+r*P+P*0.5f;
+      tb_stamp(fill,W,H,x,y,Rin); tb_stamp(outl,W,H,x,y,Rout);
+      static const int NB[4][2]={{0,1},{1,0},{1,1},{1,-1}};
+      for(int k=0;k<4;k++){
+        int nr=r+NB[k][0], nc=c+NB[k][1];
+        if(!SETT(nr,nc)) continue;
+        if(NB[k][0]&&NB[k][1] && (SETT(r,nc)||SETT(nr,c))) continue;
+        float x2=pad+i*6*P+nc*P+P*0.5f, y2=pad+nr*P+P*0.5f;
+        tb_cap(fill,W,H,x,y,x2,y2,Rin); tb_cap(outl,W,H,x,y,x2,y2,Rout);
+      }
+    }
+    #undef SETT
+  }
+  /* height field for the bevel, and the halo */
+  int rb=(int)(P*0.18f); if(rb<1) rb=1;
+  for(size_t i=0;i<N;i++){ hf[i]=fill[i]/255.0f; gl[i]=outl[i]/255.0f; }
+  box_blur_f(hf,tmp,W,H,rb,2);
+  if(ts->glowR>0) box_blur_f(gl,tmp,W,H,ts->glowR*K/2+1,3);
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  float hx=lx, hy=ly, hz=lz+1.0f, hl=sqrtf(hx*hx+hy*hy+hz*hz);
+  hx/=hl; hy/=hl; hz/=hl;
+  float S=1.7f*(2*rb+1), spec0=ipow(hz,40);
+  int so=(int)(P*0.30f)+K;
+  #define OVER(i_,c_,a_) do{ float a__=(a_); if(a__>0){ float*q=acc+(i_)*4; \
+      q[0]=((c_)>>16&255)*a__+q[0]*(1-a__); q[1]=((c_)>>8&255)*a__+q[1]*(1-a__); \
+      q[2]=((c_)&255)*a__+q[2]*(1-a__); q[3]=a__+q[3]*(1-a__); } }while(0)
+  for(int y=0;y<H;y++) for(int x=0;x<W;x++){
+    size_t i=(size_t)y*W+x;
+    if(ts->glowR>0){ float g=clampf(gl[i]*1.5f,0,1)*ts->glowAmt; OVER(i,ts->glow,g); }
+    if(x>=so && y>=so){ float a=outl[(size_t)(y-so)*W+(x-so)]/255.0f*0.65f; OVER(i,0x000000,a); }
+    if(outl[i]) OVER(i,ts->line,outl[i]/255.0f);
+    if(fill[i]){
+      float gx=(x+1<W?hf[i+1]:hf[i])-(x>0?hf[i-1]:hf[i]);
+      float gy=(y+1<H?hf[i+W]:hf[i])-(y>0?hf[i-W]:hf[i]);
+      float nx=-gx*0.5f*S, ny=-gy*0.5f*S, nz=1.0f, nl=sqrtf(nx*nx+ny*ny+1.0f);
+      nx/=nl; ny/=nl; nz/=nl;
+      float t=clampf((y-pad)/(7*P),0,1);
+      uint32_t c=ramp(ts->ramp,ts->nr,t);
+      float k=(nx*lx+ny*ly+nz*lz)-lz;
+      c = k>0 ? mixc(c,0xFFFFFF,clampf(k*0.8f,0,0.75f)) : scalec(c,clampf(1.0f+k*1.2f,0.2f,1));
+      float wm=ts->metal*clampf((1.0f-nz)*3.2f,0,1);
+      if(wm>0) c=mixc(c,env_map(env_up(nx,ny,nz),ts->env),wm);
+      float sd=nx*hx+ny*hy+nz*hz, sp=ipow(clampf(sd,0,1),40)-spec0;
+      if(sp>0) c=mixc(c,0xFFFFFF,clampf(sp*3.0f,0,1));
+      OVER(i,c,fill[i]/255.0f);
+    }
+  }
+  #undef OVER
+  /* resolve KxK down to the sprite, straight alpha */
+  o->w=W/K; o->h=H/K;
+  o->px=(uint8_t*)calloc((size_t)o->w*o->h,4);
+  if(o->px) for(int y=0;y<o->h;y++) for(int x=0;x<o->w;x++){
+    float r=0,g=0,b=0,a=0;
+    for(int j=0;j<K;j++) for(int i=0;i<K;i++){
+      const float*q=acc+((size_t)(y*K+j)*W+(x*K+i))*4;
+      r+=q[0]; g+=q[1]; b+=q[2]; a+=q[3];
+    }
+    uint8_t*d=o->px+((size_t)y*o->w+x)*4;
+    if(a>0.001f){ d[0]=(uint8_t)clampi((int)(r/a),0,255); d[1]=(uint8_t)clampi((int)(g/a),0,255); d[2]=(uint8_t)clampi((int)(b/a),0,255); }
+    d[3]=(uint8_t)clampi((int)(a/(K*K)*255.0f+0.5f),0,255);
+  }
+  spr_bounds(o);
+  free(fill); free(outl); free(hf); free(tmp); free(gl); free(acc);
+}
+
+/*  Bilinear, scaled, centred blit for zooms.  Straight-alpha sprite,
+ *  filtered premultiplied so the edges do not fringe.  Honours the band
+ *  clip; cost is the destination area.                               */
+static void blit_scaled(const spr_t*s,int cx,int cy,float sc,int alpha){
+  if(!s->px||sc<=0.01f||alpha<=0) return;
+  /* a big sprite in fast motion: point sampling, four times cheaper,
+     and nobody can see the difference while it is still moving */
+  if(s->w*sc*s->h*sc > 90000.0f){
+    int dw=(int)(s->w*sc), dh=(int)(s->h*sc), x0=cx-dw/2, y0=cy-dh/2;
+    int ya=y0<clip_y0?clip_y0:y0, yb=y0+dh>clip_y1?clip_y1:y0+dh;
+    int xa=x0<0?0:x0, xb=x0+dw>FBW?FBW:x0+dw;
+    int inv=(int)(65536.0f/sc);
+    for(int y=ya;y<yb;y++){
+      int iy=((y-y0)*inv)>>16; if(iy>=s->h) continue;
+      const uint8_t*row=s->px+(size_t)iy*s->w*4;
+      uint32_t*d=fb+(size_t)y*FBW;
+      for(int x=xa;x<xb;x++){
+        int ix=((x-x0)*inv)>>16; if(ix>=s->w) continue;
+        const uint8_t*p=row+ix*4;
+        int ea=p[3]*alpha>>8;
+        if(ea<=2) continue;
+        uint32_t dd=d[x];
+        int dr=(dd>>16)&255, dg=(dd>>8)&255, db=dd&255;
+        d[x]=RGB(dr+((p[0]-dr)*ea>>8), dg+((p[1]-dg)*ea>>8), db+((p[2]-db)*ea>>8));
+      }
+    }
+    return;
+  }
+  int dw=(int)(s->w*sc), dh=(int)(s->h*sc);
+  int x0=cx-dw/2, y0=cy-dh/2;
+  int ya=y0<clip_y0?clip_y0:y0, yb=y0+dh>clip_y1?clip_y1:y0+dh;
+  int xa=x0<0?0:x0, xb=x0+dw>FBW?FBW:x0+dw;
+  int inv=(int)(65536.0f/sc);
+  for(int y=ya;y<yb;y++){
+    int sy=(y-y0)*inv+ (inv>>1) - 32768;
+    int iy=sy>>16, fy=(sy>>8)&255;
+    if(iy<-1||iy>=s->h) continue;
+    for(int x=xa;x<xb;x++){
+      int sx=(x-x0)*inv+(inv>>1)-32768;
+      int ix=sx>>16, fx=(sx>>8)&255;
+      int r=0,g=0,b=0,a=0;
+      for(int j=0;j<2;j++){
+        int yy=iy+j; if(yy<0||yy>=s->h) continue;
+        int wy=j?fy:256-fy;
+        for(int i=0;i<2;i++){
+          int xx=ix+i; if(xx<0||xx>=s->w) continue;
+          const uint8_t*p=s->px+((size_t)yy*s->w+xx)*4;
+          if(!p[3]) continue;
+          int w=(wy*(i?fx:256-fx))>>8;
+          int pa=p[3]*w;
+          r+=p[0]*pa; g+=p[1]*pa; b+=p[2]*pa; a+=pa;
+        }
+      }
+      if(a<=0) continue;
+      int ea=((a>>8)*alpha)>>8;
+      if(ea<=0) continue;
+      uint32_t c=RGB(r/a,g/a,b/a);
+      uint32_t*d=fb+(size_t)y*FBW+x;
+      if(ea>=255){ *d=c; continue; }
+      uint32_t dd=*d;
+      int dr=(dd>>16)&255, dg=(dd>>8)&255, db=dd&255;
+      *d=RGB(dr+((((c>>16)&255)-dr)*ea>>8), dg+((((c>>8)&255)-dg)*ea>>8), db+(((c&255)-db)*ea>>8));
+    }
+  }
+}
+
+/*  A light sweep through a sprite's solid pixels: a diagonal band that
+ *  adds white where the sprite is opaque.  Per row it touches only the
+ *  band, so it costs a few thousand pixels however big the sprite.   */
+static void shine_sprite(const spr_t*s,int dx,int dy,int cy0,int cy1,float pos,int bw,int k,int amin){
+  if(!s->px||k<=0) return;
+  int y0=0,y1=s->h;
+  if(dy+y0<cy0) y0=cy0-dy;
+  if(dy+y1>cy1) y1=cy1-dy;
+  if(dy+y0<clip_y0) y0=clip_y0-dy;
+  if(dy+y1>clip_y1) y1=clip_y1-dy;
+  for(int y=y0;y<y1;y++){
+    int fy=dy+y;
+    if((unsigned)fy>=FBH) continue;
+    float c=pos-(float)y*0.55f;
+    int xa=(int)(c-bw), xb=(int)(c+bw);
+    int ra=s->rx0?s->rx0[y]:0, rb=s->rx1?s->rx1[y]:s->w-1;
+    if(xa<ra) xa=ra;
+    if(xb>rb) xb=rb;
+    if(dx+xa<0) xa=-dx;
+    if(dx+xb>=FBW) xb=FBW-1-dx;
+    const uint8_t*row=s->px+(size_t)y*s->w*4;
+    uint32_t*dst=fb+(size_t)fy*FBW+dx;
+    for(int x=xa;x<=xb;x++){
+      int a=row[x*4+3];
+      if(a<amin) continue;
+      float u=1.0f-fabsf(x-c)/bw;
+      int v=(int)(u*u*k)*a>>8;
+      uint32_t d=dst[x];
+      int r=((d>>16)&255)+v, g=((d>>8)&255)+v, b=(d&255)+v;
+      dst[x]=RGB(r>255?255:r,g>255?255:g,b>255?255:b);
+    }
+  }
+}
+
+/* the baked titles */
+enum { TT_LOGO, TT_LOGOBIG, TT_FREESPINS, TT_FSDONE, TT_BONUSDONE, TT_PICK,
+       TT_BROKE, TT_PRESS, TT_TOTALWIN, NTT };
+static spr_t title[NTT];
+static spr_t bigdig[10];            /* big gold digits for the count-ups */
+static spr_t digX;                  /* the "X" that goes with them       */
+static spr_t bigPlus;               /* and the "+" of a retrigger        */
+#define NCAP 9
+static spr_t capSpr[NCAP];          /* the attract loop's captions       */
+static const char*CAPS[NCAP]={"WILD 7","SCATTER","LUCKY 7 PICK","HOLD & SPIN","WHEEL OF 7'S",
+                              "JACKPOT","ULTIMATE","4 PROGRESSIVE JACKPOTS","FEATURES"};
+
+static const uint32_t TGOLD[6]  ={0xFFFEF0,0xFFF0B0,0xFFD24A,0xE8A018,0xFFD870,0xA86A08};
+static const uint32_t TGREEN[5] ={0xF4FFE8,0xB8FF8A,0x3CD23C,0x16861E,0x7CE860};
+static const uint32_t TRED[5]   ={0xFFF0E8,0xFF9A7A,0xF02A2A,0x9A0A14,0xFF6A4A};
+static const uint32_t TSILVER[5]={0xFFFFFF,0xEEF4FF,0xB0BCD8,0x6A7898,0xDCE4F8};
+
+static void build_titles(void){
+  tstyle_t logo ={TGOLD,6,0x1A0600,0xFF3010,0.95f,7,1,0.85f};
+  tstyle_t logoB={TGOLD,6,0x1A0600,0xFF2A10,0.90f,18,1,0.85f};
+  tstyle_t fs   ={TGREEN,5,0x021A06,0x40FF60,0.85f,16,1,0.55f};
+  tstyle_t gold ={TGOLD,6,0x1A0600,0xFFB020,0.80f,14,1,0.80f};
+  tstyle_t pick ={TGOLD,6,0x1A0600,0xC040FF,0.85f,10,1,0.80f};
+  tstyle_t red  ={TRED,5,0x1A0204,0xFF2020,0.85f,14,1,0.50f};
+  tstyle_t silv ={TSILVER,5,0x0A0C18,0x60B0FF,0.80f,10,0,0.70f};
+  bake_title(&title[TT_LOGO],     "WILD 7's",5,&logo);
+  bake_title(&title[TT_LOGOBIG],  "WILD 7's",15,&logoB);
+  bake_title(&title[TT_FREESPINS],"FREE SPINS",12,&fs);
+  bake_title(&title[TT_FSDONE],   "FREE SPINS COMPLETE",6,&fs);
+  bake_title(&title[TT_BONUSDONE],"BONUS COMPLETE",8,&gold);
+  bake_title(&title[TT_PICK],     "LUCKY 7 PICK",6,&pick);
+  bake_title(&title[TT_BROKE],    "OUT OF CREDITS",8,&red);
+  bake_title(&title[TT_PRESS],    "PRESS START",6,&silv);
+  bake_title(&title[TT_TOTALWIN], "TOTAL WIN",5,&gold);
+  for(int d=0;d<10;d++){ char b[2]={(char)('0'+d),0}; bake_title(&bigdig[d],b,16,&gold); }
+  bake_title(&digX,"X",11,&gold);
+  bake_title(&bigPlus,"+",11,&gold);
+  { tstyle_t cap={TGOLD,6,0x1A0600,0xFF9020,0.70f,5,1,0.80f};
+    for(int i=0;i<NCAP;i++) bake_title(&capSpr[i],CAPS[i],5,&cap); }
+}
+static void spr_free_t(spr_t*s){ free(s->px); free(s->rx0); free(s->rx1); memset(s,0,sizeof *s); }
+static void free_titles(void){
+  spr_t*all[NTT+11];
+  int n=0;
+  for(int i=0;i<NTT;i++) all[n++]=&title[i];
+  for(int i=0;i<10;i++) all[n++]=&bigdig[i];
+  all[n++]=&digX;
+  spr_free_t(&bigPlus);
+  for(int i=0;i<NCAP;i++) spr_free_t(&capSpr[i]);
+  for(int i=0;i<n;i++){ free(all[i]->px); free(all[i]->rx0); free(all[i]->rx1); memset(all[i],0,sizeof(spr_t)); }
 }
 
 /* ═══ BACKGROUND (built once, then memcpy'd every frame) ═══════════ */
@@ -2602,29 +3895,49 @@ static const uint32_t GREENG[4] = {0xEEFFE6,0x9CF57A,0x2E9A2E,0x115011};
 static const uint32_t ICEG[4]   = {0xFFFFFF,0xCFEEFF,0x4FA8D8,0x14506E};
 static const uint32_t RAINBOWG[6]={0xFFFFFF,0xFFE0A0,0xFF8AC8,0xA0C0FF,0x80FFD0,0x2A5A80};
 
+/*  The cabinet has two looks: the base game, and the free-spins night
+ *  set, which gets its own backdrop and gilded drums.  Both are baked
+ *  at init and art_update() swaps them.                               */
+static int bgTheme = 0;
+
 /*  Reel drum shading.  A physical reel is a cylinder seen edge on, so
  *  it is brightest across the middle and falls into shadow at the top
  *  and bottom of the window.  Cream rather than white: the reference
  *  cabinet's drums are warm, and the chrome medallions read better on
- *  a warm ground than on a clinical one.                              */
+ *  a warm ground than on a clinical one.  In free spins the drums take
+ *  on gold.                                                           */
 static uint32_t drum_shade(int y){
   float t=(float)(y-GY)/(float)(GH-1);
   float d=fabsf(t-0.5f)*2.0f;                    /* 0 centre, 1 at a lip */
-  float roll=clampf((d-0.78f)/0.22f,0,1);
-  uint32_t c=mixc(0xFFF9EC,0xEEE2C6,clampf(d*0.6f,0,1));
-  c=mixc(c,0x5E5644,roll*roll*0.78f);
+  float roll=clampf((d-0.74f)/0.26f,0,1);
+  uint32_t c = bgTheme ? mixc(0xFFF2CC,0xE8C480,clampf(d*0.75f,0,1))
+                       : mixc(0xFFFAEE,0xEEE0C2,clampf(d*0.6f,0,1));
+  c=mixc(c,bgTheme?0x5A3E14:0x5E5644,roll*roll*0.80f);
   return c;
 }
 
-/* rail panel: black surround, gradient face, gold or steel rim, a header */
+/*  Rail panel: drawn live when a panel lights up, so it is cheap: a
+ *  translucent gradient over the baked glass, a rim and a header.    */
 static void rail_panel(int x,int y,int w,int h,uint32_t hi,uint32_t lo,uint32_t rim,
                        const char*label,uint32_t lc){
-  fb_rrect(x,y,w,h,12,0x000000,215);
-  fb_rrectg(x+3,y+3,w-6,h-6,10,hi,lo,255);
+  fb_rrectg(x+3,y+3,w-6,h-6,10,hi,lo,215);
   fb_rframe(x,y,w,h,12,2.0f,rim,255);
+  fb_rframe(x+3,y+3,w-6,h-6,10,1.0f,mixc(rim,0xFFFFFF,0.5f),90);
   if(label) text(label,x+w/2,y+8,1,lc,1,1);
 }
 
+/* the cabinet version: smoked glass in a moulding, with a lit header */
+static void glass_rail(int x,int y,int w,int h,uint32_t top,uint32_t bot,int kind,
+                       const char*label,uint32_t lc){
+  fb_softshadow(x,y,w,h,12,8,120);
+  fb_glass(x+2,y+2,w-4,h-4,11,top,bot,200);
+  fb_moulding(x-1,y-1,w+2,h+2,13,4.0f,kind,255);
+  if(label){
+    int lw=(int)strlen(label)*6+14;
+    fb_rrectg(x+w/2-lw/2,y+3,lw,13,6,0x000000,0x000000,120);
+    text(label,x+w/2,y+6,1,lc,1,1);
+  }
+}
 
 /* button deck geometry, shared by the static art and the live redraw */
 #define NBTN 5
@@ -2632,139 +3945,337 @@ static const int BTNX[NBTN] = {  24, 236, 448, 660, 872 };
 static const int BTNW[NBTN] = { 196, 196, 196, 196, 196 };
 static const char*BTNL1[NBTN]= {"PAYS","BET","BET","BET","ADD"};
 static const char*BTNL2[NBTN]= {NULL, "LESS","MORE","MAX","CREDITS"};
+static const uint32_t BTNC[NBTN]={0x2A78F0,0xF0A020,0xF0A020,0xE8283A,0x22B84A};
 
-static void build_bg(void){
-  /* ── backdrop: deep cabinet blue, spotlit behind the reels ──────── */
-  vgrad(0,0,FBW,FBH,0x141A3A,0x03040E);
+/*  An illuminated arcade button: coloured translucent plastic with a
+ *  lamp behind it, a hard reflection across the top and a chrome
+ *  bezel.  `lit` is the pressed flash, brighter and seated deeper.  */
+static void paint_button(int x,int y,int w,int h,const char*l1,const char*l2,uint32_t col,int lit){
+  float r=14.0f, cx=x+w*0.5f, cy=y+h*0.5f;
+  fb_rrect(x-2,y+2,w+4,h+6,r+2,0x000000,170);
+  int dy=lit?2:0;
+  float ll=sqrtf(LX*LX+LY*LY+LZ*LZ), lx=LX/ll, ly=LY/ll, lz=LZ/ll;
+  float hw=w*0.5f-4, hh=h*0.5f-4, rr=r-3;
+  for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+    float px=x+i+0.5f, py=y+j+0.5f;
+    float d=rr_sdf(px,py,cx,cy+dy,hw,hh,rr);
+    if(d>0.5f) continue;
+    float cov=clampf(0.5f-d,0,1);
+    /* a pillow: flat on top, rolling off over the last 9 pixels */
+    float e=clampf(-d/9.0f,0,1), tilt=(1.0f-e)*(1.0f-e);
+    float gx=rr_sdf(px+0.5f,py,cx,cy+dy,hw,hh,rr)-rr_sdf(px-0.5f,py,cx,cy+dy,hw,hh,rr);
+    float gy=rr_sdf(px,py+0.5f,cx,cy+dy,hw,hh,rr)-rr_sdf(px,py-0.5f,cx,cy+dy,hw,hh,rr);
+    float gl=sqrtf(gx*gx+gy*gy); if(gl<1e-4f){ gx=0; gy=0; gl=1; }
+    float nx=gx/gl*tilt*0.95f, ny=gy/gl*tilt*0.95f, nz=sqrtf(fmaxf(0.05f,1.0f-nx*nx-ny*ny));
+    /* the lamp inside: a bright core under translucent plastic */
+    float ex=(px-cx)/(w*0.5f), ey=(py-cy-dy)/(h*0.5f);
+    float core=clampf(1.0f-sqrtf(ex*ex*0.45f+ey*ey*1.1f),0,1);
+    uint32_t dark=scalec(col,lit?0.50f:0.30f), bright=mixc(col,0xFFFFFF,lit?0.60f:0.32f);
+    uint32_t c=mixc(dark,bright,clampf(core*1.3f,0,1));
+    float k=(nx*lx+ny*ly+nz*lz)-lz;
+    c = k>0 ? mixc(c,0xFFFFFF,clampf(k*0.9f,0,0.6f)) : scalec(c,clampf(1.0f+k*1.4f,0.3f,1));
+    /* the roll-off reflects the room, like any glossy plastic */
+    float up=env_up(nx,ny,nz);
+    if(tilt>0.05f && up>0.03f) c=mixc(c,0xFFFFFF,0.35f*tilt);
+    /* a hard window reflection over the top third */
+    if(ey<-0.30f && e>0.5f){
+      float f=clampf((-0.30f-ey)/0.55f,0,1);
+      c=mixc(c,0xFFFFFF,0.08f+f*0.30f);
+    }
+    fb_blend(x+i,y+j,c,(int)(cov*255));
+  }
+  fb_moulding(x,y,w,h,r,5.0f,0,255);
+  int ty=y+dy+(l2? h/2-15 : h/2-8);
+  static const uint32_t W[3]={0xFFFFFF,0xF4F4F4,0xD0D4E0};
+  textb(l1,x+w/2,ty,2,W,3,1);
+  if(l2) textb(l2,x+w/2,ty+17,2,W,3,1);
+}
+
+/* ── the backdrop ─────────────────────────────────────────────────
+ *  A lit casino stage: a deep gradient, stage beams falling from above
+ *  the top box, out-of-focus lights (bokeh) hanging in the dark, and a
+ *  faint art-deco fan behind the reels.  The rails are smoked glass, so
+ *  the stage glows through them.                                     */
+static void paint_backdrop(int theme){
+  uint32_t top = theme?0x061430:0x1C0C3A, mid=theme?0x040A1E:0x0E0724, bot=theme?0x02040C:0x040210;
+  for(int y=0;y<FBH;y++){
+    float t=(float)y/(FBH-1);
+    uint32_t c = t<0.5f ? mixc(top,mid,t*2.0f) : mixc(mid,bot,(t-0.5f)*2.0f);
+    for(int x=0;x<FBW;x++) fb[y*FBW+x]=c;
+  }
+  /* art-deco fan: rays from below the reel window */
+  { float ox=FBW*0.5f, oy=FBH+120.0f;
+    for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
+      float a=fast_atan2(y-oy,x-ox)*24.0f/TAU;
+      float f=a-floorf(a);
+      float v=(f<0.5f?1.0f:0.0f)*0.035f*(1.0f-(float)y/FBH*0.3f);
+      if(v>0) fb_add(x,y,(int)(v*(theme?120:170)),(int)(v*(theme?140:90)),(int)(v*(theme?90:200)));
+    } }
+  /* stage beams from above: soft cones with a hot core */
+  { static const float BX[6]={-120,240,520,760,1040,1400};
+    static const float BA[6]={0.30f,0.12f,-0.06f,0.06f,-0.12f,-0.30f};
+    static const uint32_t BC0[6]={0xFF40C0,0x40C8FF,0xFFD060,0xFFD060,0x40C8FF,0xFF40C0};
+    static const uint32_t BC1[6]={0x40A0FF,0xFFD060,0x60FFD0,0x60FFD0,0xFFD060,0x40A0FF};
+    for(int b=0;b<6;b++){
+      uint32_t bc=theme?BC1[b]:BC0[b];
+      int cr=(bc>>16)&255, cg=(bc>>8)&255, cb=bc&255;
+      for(int y=0;y<FBH;y++){
+        float cxb=BX[b]+BA[b]*y*1.4f, wdt=24.0f+y*0.20f;
+        float fall=1.0f-(float)y/FBH*0.75f;
+        int xa=(int)(cxb-wdt*1.6f), xb=(int)(cxb+wdt*1.6f);
+        for(int x=xa;x<=xb;x++){
+          if(x<0||x>=FBW) continue;
+          float u=fabsf(x-cxb)/wdt;
+          float v=expf(-u*u*1.6f)*0.12f*fall;
+          fb_add(x,y,(int)(cr*v),(int)(cg*v),(int)(cb*v));
+        }
+      }
+    } }
+  /* bokeh: soft discs with a slightly brighter rim */
+  for(int i=0;i<90;i++){
+    float bx=hash2(i,1,theme*7u+3u)*FBW, by=hash2(i,2,theme*7u+3u)*FBH*0.95f;
+    float br=5.0f+hash2(i,3,theme*7u+3u)*hash2(i,4,theme*7u+3u)*26.0f;
+    static const uint32_t K0[5]={0xFFC060,0xFF60B0,0x60C0FF,0xFFFFFF,0xC080FF};
+    static const uint32_t K1[5]={0xFFD870,0xFFF0B0,0x80D8FF,0xFFFFFF,0x70FFD8};
+    uint32_t bc=(theme?K1:K0)[i%5];
+    float inten=0.10f+hash2(i,5,theme*7u+3u)*0.22f;
+    int cr=(bc>>16)&255, cg=(bc>>8)&255, cb=bc&255;
+    for(int y=(int)(by-br-1);y<=(int)(by+br+1);y++) for(int x=(int)(bx-br-1);x<=(int)(bx+br+1);x++){
+      if(x<0||y<0||x>=FBW||y>=FBH) continue;
+      float d=sqrtf((x-bx)*(x-bx)+(y-by)*(y-by))/br;
+      if(d>1.0f) continue;
+      float v=(0.75f+0.25f*smooth01(0.7f,0.95f,d))*clampf((1.0f-d)*6.0f,0,1)*inten;
+      fb_add(x,y,(int)(cr*v),(int)(cg*v),(int)(cb*v));
+    }
+  }
+  /* free spins: a night sky of pin-point stars */
+  if(theme) for(int i=0;i<260;i++){
+    int x=(int)(hash2(i,9,1u)*FBW), y=(int)(hash2(i,10,1u)*FBH);
+    int v=(int)(60+hash2(i,11,1u)*190);
+    fb_add(x,y,v,v,v*9/10);
+    if(v>200){ fb_add(x+1,y,v/3,v/3,v/3); fb_add(x-1,y,v/3,v/3,v/3); fb_add(x,y+1,v/3,v/3,v/3); fb_add(x,y-1,v/3,v/3,v/3); }
+  }
+  /* vignette */
   for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
-    float dx=(x-FBW*0.5f)/620.0f, dy=(y-320.0f)/420.0f;
-    float v=clampf(1.0f-sqrtf(dx*dx+dy*dy),0,1); v=v*v;
-    if(v>0.002f) fb_add(x,y,(int)(v*34),(int)(v*30),(int)(v*62));
-    float vx=(x-FBW*0.5f)/(FBW*0.5f), vy=(y-FBH*0.5f)/(FBH*0.5f);
-    fb_blend(x,y,0x000000,(int)(clampf((vx*vx+vy*vy)*0.52f,0,0.72f)*255));
+    float vx=(x-FBW*0.5f)/(FBW*0.5f), vy=(y-FBH*0.45f)/(FBH*0.55f);
+    fb_blend(x,y,0x000000,(int)(clampf((vx*vx+vy*vy)*0.45f-0.10f,0,0.7f)*255));
   }
-  /* faint diagonal cabinet weave */
-  for(int y=0;y<FBH;y++) for(int x=(y%6);x<FBW;x+=6) fb_blend(x,y,0xFFFFFF,5);
+}
 
-  /* ── marquee ───────────────────────────────────────────────────── */
-  fb_rrect(4,2,FBW-8,MQH-4,15,0x000000,210);
-  fb_rrectg(9,6,FBW-18,MQH-13,12,0xB4142C,0x35040C,255);
-  for(int j=0;j<22;j++)
-    for(int i=0;i<FBW-18;i++) fb_blend(9+i,6+j,0xFFFFFF,(22-j)*2);
-  fb_rframe(4,2,FBW-8,MQH-4,15,2.0f,0x5E4206,255);
-  fb_rframe(6,4,FBW-12,MQH-8,14,3.0f,0xF0C24A,255);
-  fb_rframe(10,8,FBW-20,MQH-16,11,1.0f,0x8A5A10,255);
-  /* the lettering, ticker and lights are live: see draw_marquee() */
-
-  /* ── reel window: chrome bezel around a black recess ───────────── */
-  fb_rrect(GX-16,GY-16,GW+32,GH+32,20,0x000000,255);
-  for(int k=0;k<7;k++){                       /* brushed chrome bezel   */
-    float v=0.30f+0.70f*fabsf(cosf(k*0.62f));
-    fb_rframe(GX-15+k,GY-15+k,GW+30-k*2,GH+30-k*2,18.0f-k,
-              1.0f,mixc(0x333A4C,0xF2F6FF,v),255);
+/*  The marquee box's static half: a chrome-framed lightbox with a
+ *  sunburst behind the sign and bulb sockets round the edge.  The sign,
+ *  ticker, searchlights and lit bulbs are live: see draw_marquee().  */
+static void paint_marquee_box(int theme){
+  fb_softshadow(4,2,FBW-8,MQH-4,15,6,140);
+  fb_rrectg(8,5,FBW-16,MQH-10,12,theme?0x0A2A5A:0x7A0A1E,theme?0x020816:0x1E0208,255);
+  { float ox=FBW*0.5f, oy=MQH*0.5f;
+    for(int y=6;y<MQH-6;y++) for(int x=10;x<FBW-10;x++){
+      float a=fast_atan2((y-oy)*6.0f,x-ox)*32.0f/TAU, f=a-floorf(a);
+      float dist=fabsf(x-ox)/(FBW*0.5f);
+      float v=(f<0.5f?0.10f:0.0f)*(1.0f-dist)+0.20f*expf(-dist*dist*9.0f);
+      if(v>0) fb_add(x,y,(int)(v*(theme?90:255)),(int)(v*(theme?150:90)),(int)(v*(theme?255:60)));
+    } }
+  for(int j=0;j<18;j++)
+    for(int i=10;i<FBW-10;i++) fb_blend(i,7+j,0xFFFFFF,(18-j)*2);
+  fb_moulding(3,1,FBW-6,MQH-2,16,5.0f,1,255);
+  fb_rframe(10,7,FBW-20,MQH-14,10,1.0f,0x000000,160);
+  /* bulb sockets */
+  int n=(FBW-40)/26;
+  for(int i=0;i<n;i++){
+    int x=22+i*26;
+    for(int sd=0;sd<2;sd++){
+      int y = sd? MQH-9 : 9;
+      for(int j=-4;j<=4;j++) for(int k=-4;k<=4;k++){
+        int d2=j*j+k*k;
+        if(d2<=16) fb_blend(x+k,y+j,d2>=10?0xA8A8B8:0x1A1210,230);
+      }
+    }
   }
-  fb_rframe(GX-8,GY-8,GW+16,GH+16,13,3.0f,0xF0C24A,255);
-  fb_rframe(GX-4,GY-4,GW+8,GH+8,11,2.0f,0x3A2804,255);
+}
 
-  /* the drums themselves — bright, which is the whole point */
+static void paint_reel_window(void){
+  /* a heavy frame: shadow, chrome, a gold inner bezel, a dark lip */
+  fb_softshadow(GX-22,GY-22,GW+44,GH+44,26,10,200);
+  fb_rrect(GX-22,GY-22,GW+44,GH+44,26,0x05060A,255);
+  fb_moulding(GX-22,GY-22,GW+44,GH+44,26,9.0f,0,255);
+  fb_moulding(GX-12,GY-12,GW+24,GH+24,17,7.0f,1,255);
+  fb_rframe(GX-5,GY-5,GW+10,GH+10,11,3.0f,0x0A0602,255);
+  /* corner studs: little gold domes where the mouldings meet */
+  static const int SX[4]={GX-17,GX+GW+17,GX-17,GX+GW+17}, SY[4]={GY-17,GY-17,GY+GH+17,GY+GH+17};
+  for(int k=0;k<4;k++)
+    for(int j=-6;j<=6;j++) for(int i=-6;i<=6;i++){
+      float d=sqrtf((float)(i*i+j*j))/6.0f;
+      if(d>1.0f) continue;
+      float nz=sqrtf(1.0f-d*d*0.9f), nx=i/6.0f*0.95f, ny=j/6.0f*0.95f;
+      uint32_t c=env_map(env_up(nx,ny,nz),1);
+      fb_blend(SX[k]+i,SY[k]+j,c,(int)(255*clampf((1.0f-d)*6.0f,0,1)));
+    }
+  /* the drums themselves - bright, which is the whole point */
   for(int y=GY;y<GY+GH;y++){
     uint32_t c=drum_shade(y);
     for(int r=0;r<NREEL;r++){
       int x0=GX+r*CW+2, x1=GX+(r+1)*CW-2;
       for(int x=x0;x<x1;x++){
         float e=fabsf((x-(x0+x1)*0.5f)/((x1-x0)*0.5f));
-        fb_px(x,y, e>0.93f? mixc(c,0x9A9484,(e-0.93f)/0.07f*0.45f) : c);
+        uint32_t cc = e>0.90f ? mixc(c,bgTheme?0x8A6A30:0x9A9484,(e-0.90f)/0.10f*0.55f) : c;
+        fb_px(x,y,cc);
       }
     }
   }
-  /* cell frames: a thin gold rule between every cell, so the 5x5 reads as
-     a grid of game pieces rather than five strips of paper */
+  /* cell frames: a thin gold rule between every cell */
   for(int r=0;r<NREEL;r++) for(int row=0;row<NROW;row++)
-    fb_rframe(GX+r*CW+4,GY+row*CH+3,CW-8,CH-6,10,1.2f,0xC9B47A,150);
+    fb_rframe(GX+r*CW+4,GY+row*CH+3,CW-8,CH-6,10,1.2f,bgTheme?0xC89A40:0xC9B47A,140);
   /* drum gaps: deep shadow so five separate reels read as five reels */
   for(int r=0;r<=NREEL;r++){
     int gx=GX+r*CW;
     for(int y=GY;y<GY+GH;y++)
-      for(int k=-2;k<=1;k++){
-        int a = (k==-2||k==1)?90:215;
+      for(int k=-3;k<=2;k++){
+        int a = (k==-3||k==2)?70:(k==-2||k==1)?160:235;
         fb_blend(gx+k,y,0x0A0C16,a);
       }
   }
+}
 
-  /* ── left rail: progressive jackpot ladder ─────────────────────── */
-  rail_panel(LRX,JPY,RAILW,JPH,0x2A2F52,0x090A18,0xF0C24A,"JACKPOTS - THEY GROW WITH YOUR BET",0xFFD98A);
-  /* ULTIMATE gets the big window; the three below share one size */
-  led_window(LRX+8,JPY+24,RAILW-16,46);
-  text("ULTIMATE",LRX+12,JPY+74,1,0xFFE9A8,0,1);
-  text("5 ULTIMATE 7s  -  100,000 X BET",LRX+RAILW-12,JPY+74,1,0xC9D2FF,2,1);
-  {
-    static const char*JN[3]={"MEGA","MAJOR","MINOR"};
-    static const char*JH[3]={"7+ JACKPOTS  -  200 X BET","6 JACKPOTS  -  40 X BET","5 JACKPOTS  -  5 X BET"};
-    for(int i=0;i<3;i++){
-      int y=JPY+88+i*54;
-      led_window(LRX+8,y,RAILW-16,34);
-      text(JN[i],LRX+12,y+38,1,0xC9D2FF,0,1);
-      text(JH[i],LRX+RAILW-12,y+38,1,0x8A93B8,2,1);
+/* the four tiers of the progressive sign, in their own colours */
+static const uint32_t TIERC[NJP]={0xE8F0FF,0xC050FF,0xFF3040,0x30E8B0};
+
+static void neon_frame(int x,int y,int w,int h,float r,uint32_t col,int rainbow){
+  static const uint32_t HUE[6]={0xFF4060,0xFFB030,0xE0FF40,0x40FFA0,0x40B0FF,0xB050FF};
+  for(int k=6;k>=1;k--){
+    int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+    float v=0.10f*(7-k)/6.0f;
+    for(int j=-k;j<h+k;j++) for(int i=-k;i<w+k;i++){
+      if(j>=0&&j<h&&i>=0&&i<w && i>3&&i<w-4&&j>3&&j<h-4) continue;
+      float d=rr_sdf(x+i+0.5f,y+j+0.5f,x+w*0.5f,y+h*0.5f,w*0.5f,h*0.5f,r);
+      if(fabsf(d)>k) continue;
+      if(rainbow){
+        float t=(float)(i+j*2)/(w+h*2)*6.0f; t-=floorf(t/6.0f)*6.0f;
+        int q=(int)t; uint32_t hc=mixc(HUE[q%6],HUE[(q+1)%6],t-q);
+        cr=(hc>>16)&255; cg=(hc>>8)&255; cb=hc&255;
+      }
+      fb_add(x+i,y+j,(int)(cr*v),(int)(cg*v),(int)(cb*v));
     }
   }
-  /* bulb strip down the ladder's flanks */
+  fb_rframe(x,y,w,h,r,2.0f,rainbow?0xFFFFFF:mixc(col,0xFFFFFF,0.5f),255);
+}
+
+static void paint_rails(void){
+  /* ── left rail: the progressive sign ───────────────────────────── */
+  glass_rail(LRX,JPY,RAILW,JPH,0x2A1850,0x080418,1,"PROGRESSIVE JACKPOTS",0xFFE9A8);
+  static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
+  static const char*JH[NJP]={"5 ULTIMATES - 100,000X","7+ JACKPOTS - 200X",
+                             "6 JACKPOTS - 40X","5 JACKPOTS - 5X"};
+  for(int i=0;i<NJP;i++){
+    int y = i==0 ? JPY+24 : JPY+88+(i-1)*54;
+    int h = i==0 ? 46 : 34;
+    led_window(LRX+8,y,RAILW-16,h);
+    neon_frame(LRX+8,y,RAILW-16,h,7,TIERC[i],i==0);
+    int ly = y+h+3;
+    text(JN[i],LRX+12,ly,2,mixc(TIERC[i],0xFFFFFF,0.25f),0,1);
+    text(JH[i],LRX+RAILW-12,ly+4,1,0xA8B0D0,2,1);
+  }
+  /* bulb sockets down the ladder's flanks */
   for(int i=0;i<9;i++){
     int y=JPY+14+i*28;
     for(int sd=0;sd<2;sd++){
       int x= sd? LRX+RAILW-5 : LRX+5;
-      for(int j=-2;j<=2;j++) for(int k=-2;k<=2;k++)
-        if(j*j+k*k<=4) fb_blend(x+k,y+j,0x6A4A10,220);
+      for(int j=-3;j<=3;j++) for(int k=-3;k<=3;k++)
+        if(j*j+k*k<=9) fb_blend(x+k,y+j,j*j+k*k>=6?0x9A9AAA:0x3A2A08,230);
     }
   }
-  /* resting feature panels — the lit versions are drawn over these */
-  rail_panel(LRX,FEATY,134,FEATH,0x1B2038,0x070A16,0x5A6080,"FREE SPINS",0x7A82A8);
-  rail_panel(LRX+RAILW-134,FEATY,134,FEATH,0x1B2038,0x070A16,0x5A6080,"MULTIPLIER",0x7A82A8);
+  /* feature meters, at rest; the lit versions are drawn over these */
+  glass_rail(LRX,FEATY,134,FEATH,0x16203A,0x060A16,0,"FREE SPINS",0x9AA4C8);
+  glass_rail(LRX+RAILW-134,FEATY,134,FEATH,0x16203A,0x060A16,0,"MULTIPLIER",0x9AA4C8);
 
   /* how to win */
-  {
-    int h=GY+GH-HOWY;
-    rail_panel(LRX,HOWY,RAILW,h,0x1B2038,0x070A16,0x5A6080,"HOW TO WIN",0xFFD98A);
+  { int h=GY+GH-HOWY;
+    glass_rail(LRX,HOWY,RAILW,h,0x16203A,0x060A16,0,"HOW TO WIN",0xFFD98A);
     static const char*HW[6]={"WINS READ LEFT TO RIGHT","3+ REELS, ONE EACH","STEP UP, DOWN OR ACROSS",
                              "EVERY WILD 7 DOUBLES IT","3 STARS = FREE SPINS","3 CROWNS = PICK BONUS"};
-    for(int i=0;i<6;i++) text(HW[i],LRX+RAILW/2,HOWY+30+i*26,2,i==0?0xFFFFFF:0xC8D2F0,1,1);
-  }
+    for(int i=0;i<6;i++) text(HW[i],LRX+RAILW/2,HOWY+30+i*26,2,i==0?0xFFFFFF:0xC8D2F0,1,1); }
 
   /* ── right rail: meters ────────────────────────────────────────── */
   static const char*MN[3]={"CREDITS","BET","WIN"};
+  static const uint32_t MT[3]={0x0E2A3A,0x3A0A10,0x3A1A08};
   for(int i=0;i<3;i++){
     int y=METY+i*METH;
-    rail_panel(RRX,y,RAILW,METH-4,0x2A2F52,0x090A18,0xF0C24A,MN[i],0xFFD98A);
+    glass_rail(RRX,y,RAILW,METH-4,MT[i],0x04060C,1,MN[i],0xFFD98A);
     led_window(RRX+8,y+20,RAILW-16,44);
   }
-
   /* controls crib, wholly static */
-  {
-    rail_panel(RRX,CTLY,RAILW,CTLH,0x1B2038,0x070A16,0x5A6080,"CONTROLS",0xFFD98A);
+  { glass_rail(RRX,CTLY,RAILW,CTLH,0x16203A,0x060A16,0,"CONTROLS",0xFFD98A);
     static const char*CK[6]={"START / A","L / R","X","Y","SELECT","B"};
     static const char*CV[6]={"SPIN","BET","MAX BET","ADD CREDITS","PAYS","SLAM"};
     for(int i=0;i<6;i++){
       int y=CTLY+30+i*23;
       text(CK[i],RRX+12,y,2,0x9FE8FF,0,1);
       text(CV[i],RRX+RAILW-12,y,2,0xE8ECF8,2,1);
-    }
-  }
+    } }
   /* last win panel, filled in live */
-  rail_panel(RRX,LWY,RAILW,GY+GH-LWY,0x1B2038,0x070A16,0x5A6080,"LAST WIN",0x7A82A8);
+  glass_rail(RRX,LWY,RAILW,GY+GH-LWY,0x16203A,0x060A16,0,"LAST WIN",0x9AA4C8);
+}
 
-  /* ── button deck ───────────────────────────────────────────────── */
-  fb_rrect(4,DECKY,FBW-8,FBH-DECKY-4,15,0x000000,215);
-  fb_rrectg(8,DECKY+4,FBW-16,FBH-DECKY-12,12,0x2B3358,0x080B18,255);
-  fb_rframe(4,DECKY,FBW-8,FBH-DECKY-4,15,2.0f,0x5E4206,255);
-  fb_rframe(6,DECKY+2,FBW-12,FBH-DECKY-8,13,3.0f,0xF0C24A,255);
-  /* red/white/blue rake under the deck, as on the reference cabinet */
+static void paint_deck(void){
+  fb_softshadow(4,DECKY,FBW-8,FBH-DECKY-4,15,6,160);
+  fb_glass(6,DECKY+2,FBW-12,FBH-DECKY-8,13,0x1E2448,0x04060E,235);
+  fb_moulding(4,DECKY,FBW-8,FBH-DECKY-4,15,4.0f,1,255);
+  /* red / white / blue rake along the deck lip, as on the reference cabinet */
   for(int j=0;j<6;j++){
     uint32_t c = (j<2)?0xC81828:((j<4)?0xE8ECF8:0x1A3A9A);
-    for(int i=14;i<FBW-14;i++) fb_blend(i,DECKY+6+j,c,190);
+    for(int i=16;i<FBW-16;i++) fb_blend(i,DECKY+6+j,c,150);
   }
-  for(int i=0;i<NBTN;i++)
-    keycap(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],0,0xB9BECC);
+  /* a lit recess behind the SPIN dome */
+  for(int j=-44;j<=44;j++) for(int i=-44;i<=44;i++){
+    float d=sqrtf((float)(i*i+j*j))/44.0f;
+    if(d>1.0f) continue;
+    fb_blend(SPINX+i,SPINY+j,0x000000,(int)(200*clampf((1.0f-d)*4.0f,0,1)));
+  }
+  fb_moulding(SPINX-45,SPINY-45,90,90,45,4.0f,1,255);
+}
 
+static void build_bg_theme(int theme){
+  bgTheme=theme;
+  paint_backdrop(theme);
+  paint_marquee_box(theme);
+  paint_reel_window();
+  paint_rails();
+  paint_deck();
+  /* the deck buttons, at rest; the lit variant is captured as a sprite */
+  for(int i=0;i<NBTN;i++){
+    if(theme==0){
+      uint32_t save[260*80];
+      int bx=BTNX[i]-4, by=BTNY-4, bw=BTNW[i]+8, bh=BTNH+12;
+      for(int j=0;j<bh;j++) for(int k=0;k<bw;k++) save[j*bw+k]=fb[(by+j)*FBW+bx+k];
+      paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],1);
+      grab_sprite(&btnspr[i][1],bx,by,bw,bh);
+      for(int j=0;j<bh;j++) for(int k=0;k<bw;k++) fb[(by+j)*FBW+bx+k]=save[j*bw+k];
+    }
+    paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],0);
+  }
+  bgTheme=0;
+}
+
+static uint32_t *bgBase=NULL, *bgFree=NULL;
+static void build_marquee(void);
+static void build_fire(void);
+static void build_rays(void);
+static void build_pick_assets(void);
+static void build_bg(void){
+  build_titles();
+  build_fire();
+  build_rays();
+  make_glow(&bulbspr[0],9,0xFFD890,1.8f,0.6f);
+  make_glow(&bulbspr[1],9,0xFF5030,1.8f,0.6f);
+  make_glow(&sparkspr,7,0xFFFFFF,2.5f,0.8f);
+  if(!bgFree) bgFree=(uint32_t*)malloc(sizeof bg);
+  if(!bgBase) bgBase=(uint32_t*)malloc(sizeof bg);
+  build_bg_theme(1);
+  if(bgFree) memcpy(bgFree,fb,sizeof bg);
+  build_bg_theme(0);
+  if(bgBase) memcpy(bgBase,fb,sizeof bg);
   memcpy(bg,fb,sizeof bg);
+  build_marquee();
+  build_pick_assets();
 }
 
 /* half-size blit, 2x2 box filtered — used by the paytable */
@@ -2793,6 +4304,8 @@ static uint32_t special_col(int sy){
   case SY_STAR:    return 0x7CFF6A;
   case SY_CROWN:   return 0xC060FF;
   case SY_JACKPOT: return 0xFF6A30;
+  case SY_COIN:    return 0xFFD24A;    /* gold: hold & spin */
+  case SY_WHEEL:   return 0xA86CFF;    /* violet: wheel of 7s */
   default:         return 0x9AF0FF;
   }
 }
@@ -2810,21 +4323,206 @@ static void cell_wash(int cx,int cy,uint32_t col,float amt){
   blit_wash(&washspr,cx-washspr.w/2,cy-washspr.h/2,GY,GY+GH,col,amt);
 }
 
-static void draw_reels(void){
-  for(int r=0;r<NREEL;r++){
-    int rx0=GX+r*CW+2, rx1=GX+(r+1)*CW-2;
-
-    /* a reel gone fully wild in free spins is lit end to end */
-    if(G.expand[r]){
-      float pulse=0.55f+0.45f*sinf(G.t*7.0f);
-      if(opt_limiter) pulse=0.6f+pulse*0.4f;
-      for(int y=GY;y<GY+GH;y++){
-        float ey=1.0f-fabsf((y-(GY+GH*0.5f))/(GH*0.5f));
-        int a=(int)(120*pulse*(0.35f+ey*0.65f));
-        for(int x=rx0;x<rx1;x++) fb_blend(x,y,0xFFC83A,a);
-      }
-      fb_frame(rx0,GY+1,rx1-rx0,GH-2,3,0xFFE08A,(int)(230*pulse));
+/* ── reel effects ──────────────────────────────────────────────────
+ *  A tileable strip of fire, baked once: the anticipation reel burns
+ *  up from the bottom, an expanded wild reel is a column of flame.   */
+#define FIREW (CW-4)
+#define FIREH 192
+#define NFF 6
+#define FFH 230
+static spr_t fireStrip, fireFade[NFF];
+static float artT;              /* the art clock: seconds, never reset */
+static int   flipIdx = -1;      /* the pick panel that is turning over */
+static void build_fire(void){
+  static const uint32_t FIRE[6]={0x3A0200,0xB01404,0xFF4A08,0xFF9A18,0xFFE070,0xFFFFE0};
+  spr_t*s=&fireStrip;
+  s->w=FIREW; s->h=FIREH;
+  s->px=(uint8_t*)calloc((size_t)FIREW*FIREH,4);
+  if(!s->px) return;
+  for(int y=0;y<FIREH;y++) for(int x=0;x<FIREW;x++){
+    /* tileable in y: blend two noise samples a period apart */
+    float u=(float)x/FIREW, v=(float)y/FIREH;
+    float n0=fbm(u*5.0f,v*6.0f,31u,4), n1=fbm(u*5.0f,v*6.0f+6.0f,31u,4);
+    float n=lerpf(n0,n1,v);
+    float edge=fabsf(u-0.5f)*2.0f;                 /* hotter at the sides */
+    float I=clampf((n-0.34f)*2.4f,0,1)*(0.45f+0.55f*edge*edge);
+    if(I<0.04f) continue;
+    uint32_t c=ramp(FIRE,6,I);
+    uint8_t*o=s->px+((size_t)y*FIREW+x)*4;
+    o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+    o[3]=(uint8_t)(smooth01(0.04f,0.6f,I)*235);
+  }
+  spr_bounds(s);
+  /* flames from a reel's foot: tongues under an envelope that fades out
+     upward, six phases of the turbulence to cycle through */
+  for(int k=0;k<NFF;k++){
+    spr_t*f=&fireFade[k];
+    f->w=FIREW; f->h=FFH;
+    f->px=(uint8_t*)calloc((size_t)FIREW*FFH,4);
+    if(!f->px) continue;
+    float ph=k*0.21f;
+    for(int y=0;y<FFH;y++) for(int x=0;x<FIREW;x++){
+      float u=(float)x/FIREW, v=(float)(FFH-y)/FFH;
+      float tongues=0.30f+0.70f*fbm(u*5.0f+3.1f,ph*0.9f,41u,2);
+      float turb=fbm(u*7.0f,v*3.6f-ph*2.8f,43u,4);
+      float I=clampf((tongues-v)/(tongues+0.001f)*1.3f+(turb-0.5f)*1.1f,0,1);
+      if(I<0.05f) continue;
+      uint32_t c=ramp(FIRE,6,I);
+      uint8_t*o=f->px+((size_t)y*FIREW+x)*4;
+      o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+      o[3]=(uint8_t)(smooth01(0.05f,0.5f,I)*245);
     }
+    spr_bounds(f);
+  }
+}
+
+/* a stable pseudo-random value for the draw code: no RNG, no state */
+static inline float dhash(int a,int b){ return hash2(a,b,0x5EEDu); }
+
+/* a flat blend over a rectangle, straight row loops, clipped to the band */
+static void fb_shade_rect(int x,int y,int w,int h,uint32_t col,int a){
+  if(a<=0) return;
+  if(a>255) a=255;
+  int x0=x<0?0:x, x1=x+w>FBW?FBW:x+w, y0=y<clip_y0?clip_y0:y, y1=y+h>clip_y1?clip_y1:y+h;
+  int sr=(col>>16)&255, sg=(col>>8)&255, sb=col&255;
+  for(int j=y0;j<y1;j++){
+    uint32_t*q=fb+(size_t)j*FBW;
+    for(int i=x0;i<x1;i++){
+      uint32_t d=q[i];
+      int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
+      q[i]=RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
+    }
+  }
+}
+
+/* additive rectangle outline, for glows that must not dull the drums */
+static void add_frame(int x,int y,int w,int h,uint32_t col,int k){
+  int cr=((col>>16)&255)*k>>8, cg=((col>>8)&255)*k>>8, cb=(col&255)*k>>8;
+  if(!(cr|cg|cb)) return;
+  for(int i=0;i<w;i++){ fb_add(x+i,y,cr,cg,cb); fb_add(x+i,y+h-1,cr,cg,cb); }
+  for(int j=1;j<h-1;j++){ fb_add(x,y+j,cr,cg,cb); fb_add(x+w-1,y+j,cr,cg,cb); }
+}
+
+/* fire rising through a column of the window, scrolled by the art clock */
+static void fire_column(int r,int ytop,int alpha,float speed){
+  int x=GX+r*CW+2, y1=GY+GH;
+  int base=y1-((int)(artT*speed)%FIREH);
+  for(int y=base; y+FIREH>ytop; y-=FIREH)
+    blit(&fireStrip,x,y,ytop,y1,alpha,0,0.0f);
+}
+/* flames licking up from the bottom of a reel, cycling baked frames */
+static void fire_base(int r,int alpha){
+  const spr_t*f=&fireFade[((int)(artT*14.0f))%NFF];
+  blit(f,GX+r*CW+2,GY+GH-f->h,GY,GY+GH,alpha,0,0.0f);
+}
+
+/*  Electric arcs down both sides of a reel: a jagged polyline re-rolled
+ *  twenty times a second from a hash of the frame, never from the RNG. */
+static void arc_edge(int x,int seed,uint32_t col,int a){
+  int fr=(int)(artT*20.0f);
+  float px=(float)x, py=(float)GY;
+  for(int s=1;s<=20;s++){
+    float ny=GY+GH*s/20.0f;
+    float nx=x+(dhash(seed*97+s,fr)-0.5f)*14.0f;
+    if(s==20) nx=(float)x;
+    fb_line(px,py,nx,ny,5,col,a/3);
+    fb_line(px,py,nx,ny,3,col,a*2/3);
+    fb_line(px,py,nx,ny,1,0xFFFFFF,a);
+    px=nx; py=ny;
+  }
+}
+
+/*  The anticipation reel: when two scatters or crowns are already
+ *  showing and this reel could make it three, it is lit like a fuse and
+ *  the rest of the window drops into shadow so it has the stage.
+ *  Draw-only - derived from the same partial_special() the hold uses. */
+static void antic_under(int r,float heat){
+  int x=GX+r*CW+2, w=CW-4;
+  fb_shade_rect(x,GY,w,GH,0x3A0600,(int)(120*heat));
+}
+static void antic_over(int r,float heat,int lead){
+  int x=GX+r*CW, w=CW;
+  float pl=0.55f+0.45f*sinf(artT*16.0f);
+  if(opt_limiter) pl=0.7f+pl*0.3f;
+  if(lead){
+    /* everything else steps back into the dark */
+    for(int q=0;q<NREEL;q++){
+      if(q==r) continue;
+      fb_shade_rect(GX+q*CW,GY,CW,GH,0x06040C,110);
+    }
+  }
+  /* heat over the reel: hottest at its edges and its foot */
+  for(int y=GY;y<GY+GH;y++){
+    if(y<clip_y0||y>=clip_y1) continue;
+    float b=(float)(y-GY)/GH; b=b*b*b;
+    for(int i=2;i<w-2;i++){
+      float e=fabsf((i-w*0.5f)/(w*0.5f)); e=e*e*e*e;
+      float I=heat*pl*(0.10f+0.9f*e+0.55f*b)*120.0f;
+      fb_add(x+i,y,(int)I,(int)(I*0.42f),(int)(I*0.08f));
+    }
+  }
+  fire_base(r,(int)(235*heat));
+  /* a hot glow spilling out over the bezel and the darkened reels */
+  for(int k=1;k<=16;k++){
+    int kk=(int)((17-k)*(17-k)*1.1f*heat*pl);
+    add_frame(x-k+2,GY-k,w+2*k-4,GH+2*k,0xFF8A2C,kk);
+  }
+  fb_rframe(x+1,GY+1,w-2,GH-2,8,6.0f,mixc(0xFF7A10,0xFFE878,pl),(int)(255*heat));
+  fb_rframe(x+3,GY+3,w-6,GH-6,6,2.0f,0xFFFFFF,(int)(235*heat*pl));
+  /* electric arcs down both edges */
+  arc_edge(x+4,r*2,0x70D0FF,(int)(255*heat));
+  arc_edge(x+w-5,r*2+1,0x70D0FF,(int)(255*heat));
+  /* sparks running round the frame */
+  float per=2.0f*(w+GH);
+  for(int i=0;i<12;i++){
+    float d=fmodf(artT*560.0f+i*per/12.0f,per);
+    int sx,sy;
+    if(d<w){ sx=x+(int)d; sy=GY; }
+    else if(d<w+GH){ sx=x+w; sy=GY+(int)(d-w); }
+    else if(d<2*w+GH){ sx=x+w-(int)(d-w-GH); sy=GY+GH; }
+    else { sx=x; sy=GY+GH-(int)(d-2*w-GH); }
+    blit_add(&sparkspr,sx-7,sy-7,(int)(255*heat));
+  }
+}
+
+/* the free-spins expanded wild: a reel turned into a column of fire */
+static void expand_under(int r){
+  int x=GX+r*CW+2, w=CW-4;
+  float pl=0.55f+0.45f*sinf(artT*7.0f);
+  if(opt_limiter) pl=0.65f+pl*0.35f;
+  for(int y=GY;y<GY+GH;y++){
+    if(y<clip_y0||y>=clip_y1) continue;
+    float ey=(float)(y-GY)/GH;
+    uint32_t c=mixc(0xFFD040,0xC01808,ey);
+    int a=(int)(150+60*pl);
+    for(int i=0;i<w;i++) fb_blend(x+i,y,c,a);
+  }
+  fire_column(r,GY,200,110.0f);
+}
+static void expand_over(int r){
+  int x=GX+r*CW, w=CW;
+  float pl=0.55f+0.45f*sinf(artT*7.0f);
+  if(opt_limiter) pl=0.65f+pl*0.35f;
+  for(int k=1;k<=10;k++) add_frame(x-k,GY-k,w+2*k,GH+2*k,0xFFC040,(int)((11-k)*16*pl));
+  fb_rframe(x+1,GY+1,w-2,GH-2,8,4.0f,mixc(0xFFC83A,0xFFFFFF,pl*0.5f),255);
+  fb_frame(x+6,GY+6,w-12,GH-12,1,0xFFF0C0,(int)(120*pl));
+  for(int i=0;i<8;i++){                       /* embers rising */
+    float t=fmodf(artT*0.6f+dhash(r,i),1.0f);
+    int ex=x+8+(int)(dhash(r*7,i)*(w-16)+sinf(artT*3.0f+i)*6.0f), ey=GY+GH-(int)(t*GH);
+    blit_add(&sparkspr,ex-7,ey-7,(int)(230*(1.0f-t)));
+  }
+}
+
+static void draw_reels(void){
+  /* which reel, if any, is the anticipation reel: the next one still
+     turning once two scatters or crowns are showing */
+  int ps = (G.state==ST_SPIN) ? partial_special() : 0;
+  int anticR=-1;
+  if(ps>=2) for(int r=3;r<NREEL;r++) if(G.rstate[r]==1){ anticR=r; break; }
+
+  for(int r=0;r<NREEL;r++){
+    if(r==anticR) antic_under(r,1.0f);
+    if(G.expand[r]) expand_under(r);
 
     int base=(int)floorf(G.rpos[r]);
     float frac=G.rpos[r]-base;
@@ -2834,40 +4532,59 @@ static void draw_reels(void){
       int sy  = GY + (j-1)*CH + (int)(frac*CH) + SOY;
       int sx  = GX + r*CW + SOX;
       if(G.expand[r] && !blurred) idx = SY_SEVEN;
-      if(!blurred && is_special(idx) && !G.expand[r]){
+      if(blurred){
+        blit(G.rstate[r]==1?&symb2[idx]:&symb[idx], sx,sy-BLURPAD, GY,GY+GH, 255,0,0.0f);
+        continue;
+      }
+      int cell = r*7 + ((base-j+1)%STRIPLEN+STRIPLEN)%STRIPLEN;   /* stable per strip slot */
+      if(is_special(idx) && !G.expand[r]){
         uint32_t ac=special_col(idx);
-        float pl=0.60f+0.40f*sinf(G.t*4.4f + r*0.7f + j*0.5f);
+        float pl=0.60f+0.40f*sinf(artT*4.4f + r*0.7f + j*0.5f);
         if(opt_limiter) pl=0.70f+pl*0.30f;
         int cyy=sy-SOY;
         /* tinted cell backing + lit frame, both clipped to the window */
         if(cyy>=GY-CH && cyy<=GY+GH){
-          cell_wash(sx+SYMW/2, sy+SYMH/2, ac, 0.30f*pl);
-          if(cyy>=GY-2 && cyy+CH<=GY+GH+2)
+          cell_wash(sx+SYMW/2, sy+SYMH/2, ac, 0.34f*pl);
+          if(cyy>=GY-2 && cyy+CH<=GY+GH+2){
             fb_rframe(GX+r*CW+4,cyy+3,CW-8,CH-6,10,2.5f,ac,(int)(225*pl));
-        }
-        /* slow sparkle cross */
-        float ang=G.t*1.6f + r + j;
-        float rad=(float)SYMW*0.50f*(0.85f+0.15f*pl);
-        int ccx=sx+SYMW/2, ccy=sy+SYMH/2;
-        for(int k=0;k<4;k++){
-          float aa=ang+k*(TAU/4.0f);
-          float ex=ccx+cosf(aa)*rad, ey=ccy+sinf(aa)*rad;
-          if(ey<GY+3||ey>GY+GH-3) continue;
-          for(int t2=0;t2<3;t2++) for(int t3=0;t3<3;t3++)
-            fb_blend((int)ex+t2-1,(int)ey+t3-1,0xFFFFFF,(int)(190*pl));
+            fb_rframe(GX+r*CW+6,cyy+5,CW-12,CH-10,8,1.0f,0xFFFFFF,(int)(120*pl));
+          }
         }
       }
-      blit(blurred?&symb[idx]:&sym[idx], sx,sy, GY,GY+GH, 255,0,0.0f);
+      const spr_t*sp=&sym[idx];
+      if(idx==SY_SEVEN) sp=&symfl[((int)(artT*9.0f)+cell*3)&(NFLAME-1)];
+      blit(sp, sx,sy, GY,GY+GH, 255,0,0.0f);
+      if(is_special(idx)){
+        /* a shine sweeps each special every few seconds, cell by cell */
+        float ph=fmodf(artT+dhash(cell,1)*3.1f,3.1f);
+        if(ph<0.75f){
+          float pos=-30.0f+ph/0.75f*(SYMW+90.0f);
+          shine_sprite(sp,sx,sy,GY,GY+GH,pos,11,opt_limiter?120:170,200);
+        }
+        /* and a glint turns slowly round the medal */
+        float ang=artT*1.6f + r + j;
+        float rad=(float)SYMW*0.44f;
+        int gx=sx+SYMW/2+(int)(cosf(ang)*rad), gy=sy+SYMH/2+(int)(sinf(ang)*rad);
+        if(gy>GY+6 && gy<GY+GH-6) blit_add(&sparkspr,gx-7,gy-7,opt_limiter?150:230);
+      }
     }
   }
+  for(int r=0;r<NREEL;r++){
+    if(G.expand[r]) expand_over(r);
+    if(r==anticR) antic_over(r,1.0f,1);
+  }
 
-  /* glass: a diagonal reflection and a soft inner shadow at the lip */
-  for(int j=0;j<10;j++){
-    int a=(10-j)*9;
+  /* glass: shade at the lips, a curved-glass sheen, a diagonal glint */
+  for(int j=0;j<12;j++){
+    int a=(12-j)*9;
     for(int i=0;i<GW;i++){
       fb_blend(GX+i,GY+j,0x000814,a);
       fb_blend(GX+i,GY+GH-1-j,0x000814,a);
     }
+  }
+  for(int j=0;j<26;j++){
+    int a=(int)(16.0f*sinf((j+1)/27.0f*3.14159f));
+    for(int i=0;i<GW;i++) fb_blend(GX+i,GY+14+j,0xFFFFFF,a);
   }
   for(int y=0;y<GH;y++){
     int xs = GX + (int)(y*0.95f) - 40;
@@ -3003,12 +4720,30 @@ static void draw_meters(void){
     int h = i==0 ? 46 : 34;
     int hot = (G.state==ST_JACKPOT && G.jpWon==i);
     float pl = hot ? 0.5f+0.5f*sinf(G.t*12.0f) : 0.0f;
-    uint32_t base = i==0 ? 0xFFE080 : 0xFFB020;
-    if(i==0){ float sh=0.5f+0.5f*sinf(G.t*1.3f); base=mixc(0xFFD860,0xFFF8E0,sh*0.5f); }
+    /* every tier reads in its own colour, like the sign's neon; the
+       ULTIMATE shimmers platinum with a slow rainbow passing through */
+    static const uint32_t TON[NJP]={0xFFF4D0,0xE488FF,0xFF6A4A,0x5AF4C0};
+    static const uint32_t TGH[NJP]={0x3A3420,0x3A1848,0x4A1008,0x0C3A2A};
+    uint32_t base = TON[i];
+    if(i==0){
+      static const uint32_t HU[6]={0xFF8AA0,0xFFD080,0xF0FF90,0x90FFC8,0x90D0FF,0xD0A0FF};
+      float h6=fmodf(artT*0.35f,6.0f); int hi=(int)h6;
+      uint32_t hc=mixc(HU[hi%6],HU[(hi+1)%6],h6-hi);
+      float sh=0.5f+0.5f*sinf(artT*1.3f);
+      base=mixc(0xFFF6DC,hc,0.25f+0.25f*sh);
+      /* a light running round the tier's neon */
+      float d=fmodf(artT*160.0f,(float)(2*(RAILW-16+h)));
+      int rx=LRX+8, ry=y, rw=RAILW-16, px,py;
+      if(d<rw){ px=rx+(int)d; py=ry; }
+      else if(d<rw+h){ px=rx+rw; py=ry+(int)(d-rw); }
+      else if(d<2*rw+h){ px=rx+rw-(int)(d-rw-h); py=ry+h; }
+      else { px=rx; py=ry+h-(int)(d-2*rw-h); }
+      blit_add(&sparkspr,px-7,py-7,opt_limiter?140:230);
+    }
     uint32_t on = hot ? mixc(base,0xFFFFFF,pl) : base;
     long long v = hot?G.jpAmt:jp_value(i);
-    if(i==0) seg_num(v, LRX+RAILW-13, y+8, 12, 10, 26, on, 0x4A3406, 1);
-    else     seg_num(v, LRX+RAILW-13, y+6, 10,  8, 20, on, 0x4A3406, 1);
+    if(i==0) seg_num(v, LRX+RAILW-13, y+8, 12, 10, 26, on, TGH[i], 1);
+    else     seg_num(v, LRX+RAILW-13, y+6, 10,  8, 20, on, TGH[i], 1);
     if(hot) fb_rframe(LRX+6,y-2,RAILW-12,h+4,8,2.0f,0xFFFFFF,(int)(255*pl));
   }
   /* the ladder's bulbs chase, and run hot while a jackpot is live */
@@ -3017,11 +4752,9 @@ static void draw_meters(void){
     float v=0.30f+0.70f*(0.5f+0.5f*sinf(G.t*sp2 - i*0.5f));
     if(opt_limiter) v=0.45f+v*0.45f;
     int y=JPY+14+i*28;
-    uint32_t c=mixc(0x6A4A10,0xFFE9A0,v);
     for(int sd=0;sd<2;sd++){
       int x= sd? LRX+RAILW-5 : LRX+5;
-      for(int j=-2;j<=2;j++) for(int k=-2;k<=2;k++)
-        if(j*j+k*k<=4) fb_blend(x+k,y+j,c,(int)(v*235));
+      blit_add(&bulbspr[0],x-9,y-9,(int)(v*255));
     }
   }
 
@@ -3039,8 +4772,7 @@ static void draw_meters(void){
   /* ── deck ───────────────────────────────────────────────────────── */
   for(int i=0;i<NBTN;i++){
     if(btnFlash[i]<=0) continue;
-    btnFlash[i]-=DT;
-    keycap(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],1,0xE2E6F0);
+    blit(&btnspr[i][1],BTNX[i]-4,BTNY-4,0,FBH,255,0,0.0f);
   }
   float sp = (G.state==ST_IDLE||G.state==ST_ATTRACT)
              ? 0.5f+0.5f*sinf(G.t*3.2f) : 0.0f;
@@ -3185,69 +4917,6 @@ static void paint_features(void){
   }
 }
 
-static void paint_bonus_bg(void){
-  vgrad(0,0,FBW,FBH,0x2E0C40,0x05020A);
-  for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
-    float dx=(x-FBW*0.5f)/460.0f, dy=(y-380.0f)/380.0f;
-    float v=clampf(1.0f-sqrtf(dx*dx+dy*dy),0,1); v=v*v;
-    if(v>0.003f) fb_add(x,y,(int)(v*76),(int)(v*36),0);
-  }
-  fb_rframe(12,8,FBW-24,FBH-16,14,3.0f,0xF0C24A,255);
-}
-
-static void paint_bonus(void){
-  cache_backdrop(&bnbg,paint_bonus_bg);
-  textb("LUCKY 7 PICK",FBW/2,18,6,GOLDG,5,1);
-
-  char b[80];
-  snprintf(b,sizeof b,"COLLECTED %d",G.pickTotal);
-  text(b,FBW/2-190,80,3,0xFFFFFF,1,1);
-  snprintf(b,sizeof b,"MULTIPLIER X%d",G.pickMult>0?G.pickMult:1);
-  text(b,FBW/2+190,80,3,0xC060FF,1,1);
-
-  text("STOPS",FBW/2-104,116,2,0xAFAFC8,2,1);
-  for(int i=0;i<3;i++){
-    int lit = i < G.pickStops;
-    int cx=FBW/2-70+i*34, cy=122;
-    for(int j=-11;j<=11;j++) for(int k=-11;k<=11;k++){
-      int d=j*j+k*k;
-      if(d<=121) fb_blend(cx+k,cy+j,lit?0xFF3A3A:0x2A1020,255);
-      if(d<=121 && d>=96) fb_blend(cx+k,cy+j,0xF0C24A,255);
-    }
-    if(lit) for(int j=-5;j<=5;j++) for(int k=-5;k<=5;k++)
-      if(j*j+k*k<=25) fb_blend(cx+k,cy+j,0xFFC0C0,200);
-  }
-  text("THIRD STOP ENDS THE ROUND",FBW/2+50,116,2,0xAFAFC8,0,1);
-
-  const int PW=260, PH=148, GAPX=26, GAPY=18;
-  int bx0=(FBW-(3*PW+2*GAPX))/2, by0=166;
-  for(int i=0;i<NPICK;i++){
-    int cc=i%3, rr=i/3;
-    int x=bx0+cc*(PW+GAPX), y=by0+rr*(PH+GAPY);
-    int cur=(i==G.pickCur);
-    fb_rrect(x+4,y+7,PW,PH,18,0x000000,160);
-    if(!G.pickDone[i]){
-      fb_rrectg(x,y,PW,PH,18,0x54307E,0x1C0D32,255);
-      for(int j=0;j<PH/3;j++)
-        for(int k=8;k<PW-8;k++) fb_blend(x+k,y+3+j,0xFFFFFF,(PH/3-j)*2);
-      textb("7",x+PW/2,y+30,13,REDG,4,1);
-    } else if(G.pickKind[i]==PICK_STOP){
-      fb_rrectg(x,y,PW,PH,18,0x76121C,0x2A050A,255);
-      text("STOP",x+PW/2,y+PH/2-17,6,0xFF9A9A,1,1);
-    } else if(G.pickKind[i]==PICK_MULT){
-      fb_rrectg(x,y,PW,PH,18,0x10682F,0x042810,255);
-      char m[8]; snprintf(m,sizeof m,"X%d",G.pickVal[i]);
-      textb(m,x+PW/2,y+38,10,GREENG,4,1);
-    } else {
-      fb_rrectg(x,y,PW,PH,18,0x1E4478,0x08122A,255);
-      char m[16]; snprintf(m,sizeof m,"%d",G.pickVal[i]);
-      textb(m,x+PW/2,y+40,9,GOLDG,5,1);
-    }
-    fb_rframe(x,y,PW,PH,18,cur?5.0f:2.5f,cur?0xFFFFFF:0xB08A20,255);
-  }
-  text("D-PAD TO MOVE          A TO PICK",FBW/2,FBH-38,3,0xC8C8E0,1,1);
-}
-
 /*  Both of these screens are static between player actions, and both
  *  were repainting every rounded rectangle and every string sixty times
  *  a second: the bonus board measured 37 ms a frame on its own.  Paint
@@ -3263,30 +4932,6 @@ static void draw_paytable(void){
     text(pg ? "SELECT = PAY TABLE          ANY OTHER BUTTON = BACK TO THE GAME"
             : "SELECT = FEATURES AND JACKPOTS          ANY OTHER BUTTON = BACK TO THE GAME",
          FBW/2,684,2,0xFFFFFF,1,1);
-}
-
-/* what the board looks like is a function of exactly these */
-static uint32_t bonus_key(void){
-  uint32_t k=(uint32_t)(G.pickCur*7u + G.pickStops*131u);
-  for(int i=0;i<NPICK;i++) k = k*33u + (uint32_t)(G.pickDone[i]*(i+1));
-  k = k*33u + (uint32_t)G.pickTotal;
-  k = k*33u + (uint32_t)G.pickMult;
-  return k;
-}
-
-static void draw_bonus(void){
-  uint32_t k=bonus_key();
-  if(!bnimg) bnimg=(uint32_t*)malloc((size_t)FBW*FBH*4);
-  if(!bnimg){ paint_bonus(); return; }
-  if(k!=bnkey){ paint_bonus(); memcpy(bnimg,fb,(size_t)FBW*FBH*4); bnkey=k; }
-  else memcpy(fb,bnimg,(size_t)FBW*FBH*4);
-
-  /* the one thing that animates: the cursor's halo */
-  const int PW=260, PH=148, GAPX=26, GAPY=18;
-  int bx0=(FBW-(3*PW+2*GAPX))/2, by0=166;
-  int x=bx0+(G.pickCur%3)*(PW+GAPX), y=by0+(G.pickCur/3)*(PH+GAPY);
-  float pl=0.5f+0.5f*sinf(G.t*9.0f);
-  fb_rframe(x-5,y-5,PW+10,PH+10,22,2.5f,0xFFE08A,(int)(220*pl));
 }
 
 /* the jackpot celebration */
@@ -3351,55 +4996,710 @@ static void draw_addcr(void){
   text(b,FBW/2,py+214,2,0x8AF0FF,1,1);
 }
 
+/* ═══ SHOWTIME: the big moments ════════════════════════════════════
+ *  Free spins awarded, a feature over, the attract loop.  These are the
+ *  screens that sell the machine from across the room, so they get the
+ *  Hollywood treatment - turning sunbursts, titles that zoom in and
+ *  settle, counters that roll - and all of it is baked sprites, lookup
+ *  tables and a hash of the clock: no per-pixel maths, no state.
+ * ================================================================= */
+static void commas(char*out,size_t n,long long v);
+/* the sign in the middle of the top box: see build_marquee() */
+#define MQPW 330
+#define MQPX (FBW/2-MQPW/2)
+#define MQPY 3
+#define MQPH (MQH-6)
+
+/*  A rotating sunburst.  The angle and falloff of every point of a
+ *  half-resolution field are tabulated once, so a frame is a table
+ *  lookup and an add per 2x2 block, and only inside the burst.       */
+#define RAYW 640
+#define RAYH 360
+static uint8_t *rayAng=NULL, *rayFall=NULL;
+static uint8_t rayProf[256];
+static void build_rays(void){
+  rayAng=(uint8_t*)malloc(RAYW*RAYH); rayFall=(uint8_t*)malloc(RAYW*RAYH);
+  if(!rayAng||!rayFall){ free(rayAng); free(rayFall); rayAng=rayFall=NULL; return; }
+  for(int y=0;y<RAYH;y++) for(int x=0;x<RAYW;x++){
+    float dx=(x-RAYW*0.5f+0.5f)*2.0f, dy=(y-RAYH*0.5f+0.5f)*2.0f;
+    float a=fast_atan2(dy,dx)/TAU+0.5f;
+    float d=sqrtf((dx/640.0f)*(dx/640.0f)+(dy/400.0f)*(dy/400.0f));
+    float f=clampf(1.0f-d,0,1);
+    f=f*smooth01(0.0f,0.12f,d);
+    rayAng[y*RAYW+x]=(uint8_t)((int)(a*256.0f)&255);
+    rayFall[y*RAYW+x]=(uint8_t)(f*255.0f);
+  }
+  for(int i=0;i<256;i++){ float t=i/256.0f; rayProf[i]=(uint8_t)(255.0f*smooth01(0.18f,0.34f,t)*(1.0f-smooth01(0.66f,0.82f,t))); }
+}
+/*  Two counter-rotating bursts in one pass (the second may be off,
+ *  k2=0): one read-modify-write per pixel however many layers.      */
+static void draw_sunburst2(int cx,int cy,float rot,int nrays,uint32_t col,int k,
+                           float rot2,int nrays2,uint32_t col2,int k2){
+  if(!rayAng||(k<=0&&k2<=0)) return;
+  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+  int dr=(col2>>16)&255, dg=(col2>>8)&255, db=col2&255;
+  int r256=(int)(rot*256.0f), q256=(int)(rot2*256.0f);
+  for(int yy=0;yy<RAYH;yy++){
+    int sy=cy+(yy-RAYH/2)*2;
+    if(sy+1<clip_y0||sy>=clip_y1||sy<0||sy+1>=FBH) continue;
+    const uint8_t*fa=rayFall+yy*RAYW, *aa=rayAng+yy*RAYW;
+    uint32_t*r0=fb+(size_t)sy*FBW, *r1=r0+FBW;
+    int do0=(sy>=clip_y0), do1=(sy+1<clip_y1);
+    int xa=0, xb=RAYW;
+    if(cx-RAYW<0) xa=(RAYW-cx)/2+1;
+    if(cx+RAYW>FBW-2) xb=RAYW-((cx+RAYW)-(FBW-2))/2-1;
+    for(int xx=xa;xx<xb;xx++){
+      int f=fa[xx]; if(!f) continue;
+      int v1=(rayProf[(aa[xx]*nrays+r256)&255]*f>>8)*k>>8;
+      int v2=k2>0?(rayProf[(aa[xx]*nrays2+q256)&255]*f>>8)*k2>>8:0;
+      if(v1+v2<=2) continue;
+      int ar=(cr*v1+dr*v2)>>8, ag=(cg*v1+dg*v2)>>8, ab=(cb*v1+db*v2)>>8;
+      int sx=cx+(xx-RAYW/2)*2;
+      for(int q=0;q<2;q++){
+        if(q==0 && !do0) continue;
+        if(q==1 && !do1) continue;
+        uint32_t*d=(q?r1:r0)+sx;
+        for(int e=0;e<2;e++){
+          uint32_t c=d[e];
+          int r=((c>>16)&255)+ar, g=((c>>8)&255)+ag, bb=(c&255)+ab;
+          d[e]=RGB(r>255?255:r,g>255?255:g,bb>255?255:bb);
+        }
+      }
+    }
+  }
+}
+static __attribute__((unused)) void draw_sunburst(int cx,int cy,float rot,int nrays,uint32_t col,int k){
+  draw_sunburst2(cx,cy,rot,nrays,col,k,0,1,0,0);
+}
+
+/*  The banner screens dim the game and throw a sunburst over it.  Done
+ *  as two passes that is two read-modify-writes of most of a megapixel;
+ *  fused, it is one.  deep=0 keeps 3/8 of the scene, deep=1 keeps 9/32.
+ *  Everything below y0 (the marquee is spared) is touched.            */
+static void dim_burst(int y0,int deep,int cx,int cy,
+                      float rot,int nrays,uint32_t col,int k,
+                      float rot2,int nrays2,uint32_t col2,int k2){
+  /*  After the dim no channel is above 94, so the light added can be
+   *  capped at 161 and summed as one packed word, no per-channel clamp.
+   *  The light for every (falloff, angle) pair is tabulated per frame:
+   *  32 x 256 words, then each pixel is a shift, two loads and an add. */
+  uint32_t T[32][256];            /* per call, so bands never share it */
+  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+  int dr=(col2>>16)&255, dg=(col2>>8)&255, db=col2&255;
+  int r256=(int)(rot*256.0f), q256=(int)(rot2*256.0f);
+  int lit=(rayAng && (k>0||k2>0));
+  if(lit) for(int a=0;a<256;a++){
+    int p1=rayProf[(a*nrays+r256)&255]*k>>8, p2=k2>0?rayProf[(a*nrays2+q256)&255]*k2>>8:0;
+    for(int f=0;f<32;f++){
+      int v1=p1*f/31, v2=p2*f/31;
+      int ar=(cr*v1+dr*v2)>>8, ag=(cg*v1+dg*v2)>>8, ab=(cb*v1+db*v2)>>8;
+      if(ar>161) ar=161;
+      if(ag>161) ag=161;
+      if(ab>161) ab=161;
+      T[f][a]=RGB(ar,ag,ab);
+    }
+  }
+  const uint32_t m2=deep?0x070707:0x1F1F1F; const int s2=deep?5:3;
+  int ya=y0>clip_y0?y0:clip_y0;
+  for(int y=ya;y<clip_y1;y++){
+    uint32_t*q=fb+(size_t)y*FBW;
+    int yy=((y-cy+RAYH*2)>>1)-RAYH/2;
+    if(!lit||yy<0||yy>=RAYH){
+      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>2)&0x3F3F3F)+((c>>s2)&m2); }
+      continue;
+    }
+    const uint8_t*fa=rayFall+yy*RAYW, *aa=rayAng+yy*RAYW;
+    int xo=((0-cx+RAYW*2)>>1)-RAYW/2;
+    for(int x=0;x<FBW;x+=2){
+      int xx=xo+(x>>1);
+      uint32_t add = (xx>=0&&xx<RAYW) ? T[fa[xx]>>3][aa[xx]] : 0;
+      uint32_t c0=q[x], c1=q[x+1];
+      q[x]  =((c0>>2)&0x3F3F3F)+((c0>>s2)&m2)+add;
+      q[x+1]=((c1>>2)&0x3F3F3F)+((c1>>s2)&m2)+add;
+    }
+  }
+}
+
+/*  A neon tube round a panel, cheap enough to run live: a stepped
+ *  additive halo on the perimeter only, and the tube itself.         */
+static void neon_live(int x,int y,int w,int h,float r,uint32_t col,int k){
+  for(int i=1;i<=8;i++) add_frame(x-i,y-i,w+2*i,h+2*i,col,(9-i)*(9-i)*k>>8);
+  fb_rframe(x,y,w,h,r,2.0f,mixc(col,0xFFFFFF,0.45f),255);
+}
+static uint32_t hue_at(float t){
+  static const uint32_t H[6]={0xFF4060,0xFFB030,0xE0FF40,0x40FFA0,0x40B0FF,0xB050FF};
+  t-=floorf(t); t*=6.0f; int i=(int)t;
+  return mixc(H[i%6],H[(i+1)%6],t-i);
+}
+
+/*  A dim that spares the marquee, which keeps selling while a banner is
+ *  up.  The common levels are shifts and masks rather than a blend: this
+ *  runs over most of a megapixel, every frame a banner is showing.    */
+static void dim_below(int y0,int a){
+  if(y0<clip_y0) y0=clip_y0;
+  int y1=clip_y1;
+  if(a>=150){                      /* keep 3/8 */
+    for(int y=y0;y<y1;y++){ uint32_t*q=fb+(size_t)y*FBW;
+      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>2)&0x3F3F3F)+((c>>3)&0x1F1F1F); } }
+    if(a>=195) for(int y=y0;y<y1;y++){ uint32_t*q=fb+(size_t)y*FBW;   /* then 3/4 of that */
+      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>1)&0x7F7F7F)+((c>>2)&0x3F3F3F); } }
+  } else fb_shade_rect(0,y0,FBW,FBH-y0,0x000000,a);
+}
+
+static float ease_back(float x){ x=clampf(x,0,1); const float c1=1.70158f,c3=c1+1.0f; float p=x-1.0f; return 1.0f+c3*p*p*p+c1*p*p; }
+
+/* a big title that zooms in, overshoots and settles, then shines */
+static void title_zoom(int id,int cx,int cy,float t,float speed){
+  const spr_t*s=&title[id];
+  float z=ease_back(t*speed);
+  if(t*speed<1.0f) blit_scaled(s,cx,cy,z,(int)(255*clampf(t*speed*3.0f,0,1)));
+  else {
+    blit(s,cx-s->w/2,cy-s->h/2,0,FBH,255,0,0.0f);
+    float ph=fmodf(t*1.1f,2.2f);
+    if(ph<1.0f) shine_sprite(s,cx-s->w/2,cy-s->h/2,0,FBH,-60.0f+ph*(s->w+160.0f),26,170,210);
+  }
+}
+
+/* big gold digits, centred, for the counters */
+static void big_number(long long v,int cx,int cy,float sc){
+  char b[24]; snprintf(b,sizeof b,"%lld",v);
+  int n=(int)strlen(b), adv=(int)(bigdig[0].w*0.62f*sc), w=adv*(n-1);
+  for(int i=0;i<n;i++){
+    const spr_t*s=&bigdig[b[i]-'0'];
+    int x=cx-w/2+i*adv;
+    if(sc>0.995f && sc<1.005f) blit(s,x-s->w/2,cy-s->h/2,0,FBH,255,0,0.0f);
+    else blit_scaled(s,x,cy,sc,255);
+  }
+}
+
+/* a lit plate for a line of text on a banner */
+static void banner_plate(int cx,int cy,int w,int h,uint32_t rim){
+  /* a modest radius keeps the rounded-rect primitives on their fast path */
+  fb_rrectg(cx-w/2,cy-h/2,w,h,10,0x140818,0x04020A,225);
+  fb_rframe(cx-w/2,cy-h/2,w,h,10,2.0f,rim,255);
+  fb_rframe(cx-w/2+3,cy-h/2+3,w-6,h-6,7,1.0f,mixc(rim,0xFFFFFF,0.5f),110);
+}
+
+/* glints drifting down through a banner: a hash of their index and the
+   clock places them, so this is pure drawing */
+static void glint_rain(int n,float t,int k){
+  for(int i=0;i<n;i++){
+    float x=dhash(i,11)*FBW, sp=90.0f+dhash(i,12)*160.0f;
+    float y=fmodf(dhash(i,13)*FBH+t*sp,(float)(FBH-MQH))+MQH;
+    float tw=0.5f+0.5f*sinf(t*6.0f+i);
+    blit_add(&sparkspr,(int)x-7,(int)y-7,(int)(k*tw));
+  }
+}
+
+/* ── free spins: the status bar takes over the top box ───────────── */
+static void draw_fsbar(void){
+  char b[64];
+  float pl=0.5f+0.5f*sinf(artT*4.0f);
+  for(int sd=0;sd<2;sd++){
+    int x = sd ? MQPX+MQPW+4 : 10, w = MQPX-14, y=6, h=MQH-12;
+    fb_rrectg(x,y,w,h,12,0x06301A,0x010A04,255);
+    fb_rframe(x,y,w,h,12,2.0f,mixc(0x5AE070,0xE8FFD8,pl*0.5f),255);
+    fb_rframe(x+3,y+3,w-6,h-6,9,1.0f,0xFFD24A,150);
+  }
+  static const uint32_t G2[4]={0xF4FFE8,0xB8FF8A,0x3CD23C,0x16861E};
+  text("FREE SPINS",40,23,2,0xB8FFB0,0,1);
+  snprintf(b,sizeof b,"%d",G.freeSpins);
+  textb(b,260,15,4,G2,4,1);
+  text(G.freeSpins==1?"LAST ONE":"LEFT",300,23,2,0xE8FFE0,0,1);
+  int m=G.fsMult<1?1:G.fsMult;
+  snprintf(b,sizeof b,"X%d",m);
+  text("MULTIPLIER",MQPX+MQPW+34,23,2,0xFFE9A8,0,1);
+  textb(b,MQPX+MQPW+194,15,4,m>1?GOLDG:SILVERG,m>1?5:4,1);
+  char w[24]; commas(w,sizeof w,G.fsWon);
+  snprintf(b,sizeof b,"WON %s",w);
+  text(b,FBW-36,23,2,0xFFFFFF,2,1);
+}
+
+/* ── FREE SPINS awarded ─────────────────────────────────────────── */
+static void draw_fsintro(void){
+  float t=G.t;
+  if(t<0.2f) dim_below(MQH,(int)(200*t*5.0f));
+  else dim_burst(MQH,1,FBW/2,330,artT*0.08f,18,0x40FF60,opt_limiter?120:200,
+                 -artT*0.05f,9,0xFFD040,opt_limiter?70:120);
+  title_zoom(TT_FREESPINS,FBW/2,210,t,2.2f);
+  /* the count rolls like a reel, then lands */
+  int award = G.inFree ? FS_RETRIG : FS_AWARD;
+  if(t>0.35f){
+    float u=t-0.35f;
+    int n = u<0.4f ? (int)(dhash((int)(u*24.0f),7)*9.99f) : award;
+    float pop = u<0.4f ? 1.0f : 1.0f+0.35f*clampf(1.0f-(u-0.4f)*4.0f,0,1);
+    if(G.inFree) blit_scaled(&bigPlus,FBW/2-70,392,0.8f*pop,255);
+    big_number(n,FBW/2+(G.inFree?30:0),392,pop);
+  }
+  if(t>1.2f){
+    int a=(int)(255*clampf((t-1.2f)*3.0f,0,1));
+    banner_plate(FBW/2,512,900,40,0x5AE070);
+    text(G.inFree?"3 MORE FREE SPINS  -  THE MULTIPLIER KEEPS CLIMBING"
+                 :"EXPANDING WILDS  -  EVERY ONE CLIMBS THE MULTIPLIER, UP TO X5",
+         FBW/2,505,2,mixc(0x000000,0xE8FFE0,a/255.0f),1,1);
+    char b[48]; snprintf(b,sizeof b,"%d SCATTERS",G.scatCount);
+    text(b,FBW/2,556,3,0xFFE9A8,1,1);
+  }
+  glint_rain(24,t,200);
+}
+
+/* ── a feature over: free spins (banner 3) or the pick (banner 4) ── */
+static void draw_bonusend(void){
+  float t=G.t;
+  int fs=(G.banner==3);
+  if(t<0.2f) dim_below(MQH,(int)(205*t*5.0f));
+  else dim_burst(MQH,1,FBW/2,340,artT*0.07f,16,fs?0x60FF80:0xFFB020,opt_limiter?110:190,
+                 -artT*0.05f,8,0xFFE070,opt_limiter?60:110);
+  title_zoom(fs?TT_FSDONE:TT_BONUSDONE,FBW/2,190,t,2.4f);
+  long long total = fs ? (long long)G.fsWon
+                       : (long long)G.pickTotal*(G.pickMult>0?G.pickMult:1);
+  if(t>0.3f){
+    const spr_t*tw=&title[TT_TOTALWIN];
+    blit(tw,FBW/2-tw->w/2,300-tw->h/2,0,FBH,255,0,0.0f);
+    float u=clampf((t-0.3f)/1.1f,0,1);
+    long long shown=(long long)(total*(1.0f-(1.0f-u)*(1.0f-u)));
+    int w=seg_width(10,24,64,1);
+    fb_rrect(FBW/2-w/2-22,346,w+44,88,14,0x000000,230);
+    fb_rframe(FBW/2-w/2-22,346,w+44,88,14,2.0f,0xFFD24A,255);
+    neon_live(FBW/2-w/2-22,346,w+44,88,14,0xFFB020,200);
+    float pl=0.5f+0.5f*sinf(artT*8.0f);
+    seg_num(shown,FBW/2+w/2,358,10,24,64,
+            u>=1.0f?mixc(0xFFB020,0xFFFFFF,pl*0.6f):0xFFB020,0x3A2804,1);
+  }
+  if(!fs && t>0.9f){
+    char a[24],b[80];
+    commas(a,sizeof a,G.pickTotal);
+    snprintf(b,sizeof b,"COLLECTED %s   X%d MULTIPLIER",a,G.pickMult>0?G.pickMult:1);
+    banner_plate(FBW/2,480,700,40,0xC060FF);
+    text(b,FBW/2,473,2,0xF4E0FF,1,1);
+  }
+  glint_rain(30,t,220);
+}
+
+static void draw_broke(void){
+  float pl=0.5f+0.5f*sinf(artT*3.0f);
+  dim_burst(MQH,1,FBW/2,300,artT*0.04f,12,0xFF3020,(int)(60+60*pl),0,1,0,0);
+  const spr_t*s=&title[TT_BROKE];
+  blit(s,FBW/2-s->w/2,280-s->h/2,0,FBH,255,0,0.0f);
+  if(((int)(artT*2.0f))&1){
+    banner_plate(FBW/2,400,620,46,0xFF5A5A);
+    text("PRESS START TO ADD CREDITS",FBW/2,391,3,0xFFFFFF,1,1);
+  }
+}
+
+/* ── ATTRACT: a cinematic loop while nobody is playing ───────────── */
+typedef struct { int sy; const char*name; const char*l1; const char*l2; uint32_t col; } show_t;
+static const show_t SHOW[7]={
+  {SY_SEVEN,  "WILD 7",       "STANDS IN FOR EVERY PAYING SYMBOL",    "AND EVERY WILD IN A WIN DOUBLES IT - X2, X4, X8", 0xFFC24A},
+  {SY_STAR,   "SCATTER",      "3 OR MORE ANYWHERE - FREE SPINS",      "EXPANDING WILDS, MULTIPLIER UP TO X5",            0x7CFF6A},
+  {SY_CROWN,  "LUCKY 7 PICK", "3 CROWNS ON REELS 1, 3 AND 5",         "PICK PANELS FOR CREDITS AND A X2",                0xC060FF},
+  {SY_COIN,   "HOLD & SPIN",  "6 OR MORE LUCKY COINS",                "LOCK THEM IN AND RESPIN FOR MORE",                0xFFD24A},
+  {SY_WHEEL,  "WHEEL OF 7'S", "3 WHEELS ON REELS 2, 3 AND 4",         "SPIN THE WHEEL FOR CREDITS AND JACKPOTS",         0xFF5AA8},
+  {SY_JACKPOT,"JACKPOT",      "5, 6 OR 7+ TOUCHING",                  "MINOR, MAJOR OR MEGA - PAID FROM THE REELS",      0xFF6A30},
+  {SY_ULT,    "ULTIMATE",     "5 ULTIMATES TOUCHING",                 "THE ULTIMATE JACKPOT - 100,000 X YOUR BET",       0x9AF0FF},
+};
+static const char*FEATLINES[9]={
+  "ADJACENT WAYS - WINS READ LEFT TO RIGHT",
+  "EVERY WILD 7 DOUBLES THE WIN",
+  "FREE SPINS - MULTIPLIER CLIMBS TO X5",
+  "LUCKY 7 PICK BONUS",
+  "HOLD & SPIN - 6 OR MORE LUCKY COINS",
+  "WHEEL OF 7'S - 3 WHEELS ON REELS 2, 3 AND 4",
+  "7 STRIKE - RANDOM WILDS DROP IN",
+  "GAMBLE ANY WIN - DOUBLE OR NOTHING",
+  "4 PROGRESSIVE JACKPOTS",
+};
+#define ATT_LOOP 21.0f
+
+static void draw_attract(void){
+  float T=fmodf(artT,ATT_LOOP);
+  char b[64];
+  if(T<6.0f){
+    /* the logo arrives, and the top prize under it */
+    dim_burst(MQH,0,FBW/2,250,artT*0.06f,20,0xFFB030,opt_limiter?110:180,
+              -artT*0.04f,10,0xFF4060,opt_limiter?60:100);
+    title_zoom(TT_LOGOBIG,FBW/2,215,T,1.6f);
+    if(T>1.0f){
+      int a=(int)(255*clampf((T-1.0f)*3.0f,0,1));
+      text("THE ULTIMATE JACKPOT",FBW/2,356,3,mixc(0,0xFFE9A8,a/255.0f),1,1);
+      int w=seg_width(12,18,48,1);
+      fb_rrect(FBW/2-w/2-18,390,w+36,70,12,0x000000,(int)(a*0.9f));
+      neon_live(FBW/2-w/2-18,390,w+36,70,12,hue_at(artT*0.3f),a);
+      float pl=0.5f+0.5f*sinf(artT*2.0f);
+      seg_num(jp_value(JP_ULT),FBW/2+w/2,401,12,18,48,mixc(0xFFE080,0xFFFFFF,pl*0.5f),0x3A2804,1);
+    }
+  } else if(T<14.0f){
+    /* the feature symbols, one at a time, each with what it does */
+    float u=T-6.0f;
+    int i=(int)(u/(8.0f/7.0f)); if(i>6) i=6;
+    float lt=u-i*(8.0f/7.0f);
+    const show_t*sh=&SHOW[i];
+    dim_burst(MQH,0,FBW/2,250,artT*0.10f,16,sh->col,opt_limiter?120:200,0,1,0,0);
+    /* the close-up pops in and out; while it holds, it is a plain blit */
+    float z=ease_back(lt*3.2f);
+    if(lt>1.0f) z*=1.0f-(lt-1.0f)*4.0f;
+    const spr_t*bs=&symBig[sh->sy];
+    if(bs->px){
+      if(z>0.985f && z<1.015f) blit(bs,FBW/2-bs->w/2,250-bs->h/2,0,FBH,255,0,0.0f);
+      else if(z>0.05f) blit_scaled(bs,FBW/2,250,z*1.08f,255);
+    } else if(z>0.05f) blit_scaled(&sym[sh->sy],FBW/2,250,z*2.3f,255);
+    if(lt>0.25f && lt<1.08f){
+      { const spr_t*c=&capSpr[i]; blit(c,FBW/2-c->w/2,410-c->h/2,0,FBH,255,0,0.0f); }
+      banner_plate(FBW/2,476,820,70,sh->col);
+      text(sh->l1,FBW/2,456,3,0xFFFFFF,1,1);
+      text(sh->l2,FBW/2,488,2,mixc(sh->col,0xFFFFFF,0.35f),1,1);
+    }
+  } else if(T<17.5f){
+    /* four progressives, lit like the sign on the rail */
+    float u=T-14.0f;
+    dim_burst(MQH,0,FBW/2,300,artT*0.05f,24,0xC060FF,opt_limiter?90:150,0,1,0,0);
+    { const spr_t*c=&capSpr[7]; blit(c,FBW/2-c->w/2,114-c->h/2,0,FBH,255,0,0.0f); }
+    static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
+    for(int k=0;k<NJP;k++){
+      float d=clampf((u-k*0.18f)*3.0f,0,1);
+      if(d<=0) continue;
+      int y=178+k*96, w=seg_width(12,16,42,1)+220, x=FBW/2-w/2+(int)((1.0f-ease_back(d))*400.0f);
+      fb_rrect(x,y,w,72,12,0x000000,230);
+      neon_live(x,y,w,72,12,k==0?hue_at(artT*0.3f):TIERC[k],220);
+      text(JN[k],x+20,y+26,3,mixc(TIERC[k],0xFFFFFF,0.2f),0,1);
+      seg_num(jp_value(k),x+w-18,y+15,12,16,42,k==0?0xFFF0C0:mixc(TIERC[k],0xFFFFFF,0.35f),0x2A2230,1);
+    }
+  } else {
+    /* the whole game in nine lines */
+    float u=T-17.5f;
+    dim_burst(MQH,0,FBW/2,330,artT*0.06f,18,0xFFB030,opt_limiter?80:130,0,1,0,0);
+    fb_shade_rect(GX-8,150,GW+16,356,0x05030C,150);
+    fb_rframe(GX-8,150,GW+16,356,14,2.0f,0xFFD24A,200);
+    { const spr_t*c=&capSpr[8]; blit(c,FBW/2-c->w/2,104-c->h/2,0,FBH,255,0,0.0f); }
+    for(int k=0;k<9;k++){
+      float d=clampf((u-k*0.12f)*4.0f,0,1);
+      if(d<=0) continue;
+      int y=164+k*38, x=FBW/2+(int)((1.0f-d)*(k&1?700:-700));
+      text(FEATLINES[k],x,y,3,k&1?0x9FE8FF:0xFFFFFF,1,1);
+    }
+  }
+  /* always: PRESS START, pulsing */
+  { const spr_t*p=&title[TT_PRESS];
+    float pl=0.5f+0.5f*sinf(artT*4.0f);
+    blit(p,FBW/2-p->w/2,566-p->h/2,0,FBH,(int)(140+115*pl),0,0.0f);
+    float ph=fmodf(artT*0.9f,2.0f);
+    if(ph<1.0f) shine_sprite(p,FBW/2-p->w/2,566-p->h/2,0,FBH,-40.0f+ph*(p->w+100.0f),20,150,210); }
+  snprintf(b,sizeof b,"SELECT = PAY TABLE     X = MAX BET     Y = ADD CREDITS");
+  text(b,FBW/2,604,2,0xAFAFC8,1,1);
+}
+
+/* ═══ LUCKY 7 PICK ═════════════════════════════════════════════════
+ *  A velvet stage, nine gold-framed panels each carrying the 7 emblem,
+ *  and lit readouts for what has been collected.  The stage and the
+ *  panel faces are baked at init; the board is painted into a cache
+ *  whenever a pick changes it, and only the cursor, the glints and the
+ *  panel turning over are drawn live.
+ * ================================================================= */
+#define PK_PW 260
+#define PK_PH 148
+#define PK_GX 26
+#define PK_GY 18
+#define PK_BX ((FBW-(3*PK_PW+2*PK_GX))/2)
+#define PK_BY 166
+enum { TILE_CLOSED, TILE_CREDIT, TILE_MULT, TILE_STOP, NTILE };
+static spr_t tileSpr[NTILE];
+static spr_t pkGlow;          /* the cursor's neon, baked: gold halo and a white tube */
+
+static void pk_tile_xy(int i,int*x,int*y){
+  *x=PK_BX+(i%3)*(PK_PW+PK_GX); *y=PK_BY+(i/3)*(PK_PH+PK_GY);
+}
+
+/* one panel face, painted into the framebuffer at (x,y) */
+static void paint_tile(int x,int y,int kind){
+  static const uint32_t TOP[NTILE]={0x6A2090,0x1E5CB8,0x18A848,0xC0142A};
+  static const uint32_t BOT[NTILE]={0x1A0632,0x06142E,0x04280E,0x2A0206};
+  const int w=PK_PW, h=PK_PH;
+  float r=18.0f;
+  for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+    float d=rr_sdf(i+0.5f,j+0.5f,w*0.5f,h*0.5f,w*0.5f,h*0.5f,r);
+    if(d>0.5f) continue;
+    float t=(float)j/h;
+    uint32_t c=mixc(TOP[kind],BOT[kind],t);
+    float dx=(i-w*0.5f)/(w*0.5f), dy=(j-h*0.42f)/(h*0.6f);
+    float lamp=clampf(1.0f-sqrtf(dx*dx*0.7f+dy*dy),0,1);
+    c=mixc(c,mixc(TOP[kind],0xFFFFFF,0.35f),lamp*lamp*0.6f);
+    if(kind==TILE_CLOSED){                          /* quilted velvet */
+      float q=fabsf(fmodf((i+j)*0.5f,16.0f)-8.0f), q2=fabsf(fmodf((i-j+400)*0.5f,16.0f)-8.0f);
+      if(q<0.9f||q2<0.9f) c=scalec(c,0.72f);
+      else if(q<1.8f||q2<1.8f) c=mixc(c,0xFFFFFF,0.06f);
+    } else {                                        /* a sunburst behind the prize */
+      float a=fast_atan2(j-h*0.5f,i-w*0.5f)*14.0f/TAU; a-=floorf(a);
+      if(a<0.5f) c=mixc(c,0xFFFFFF,0.07f*lamp);
+    }
+    fb_blend(x+i,y+j,c,(int)(clampf(0.5f-d,0,1)*255));
+  }
+  for(int j=0;j<h*0.40f;j++){                      /* glass reflection */
+    float f=1.0f-j/(h*0.40f);
+    for(int i=10;i<w-10;i++) fb_blend(x+i,y+4+j,0xFFFFFF,(int)(f*f*34));
+  }
+  fb_moulding(x,y,w,h,r,7.0f,1,255);
+  fb_rframe(x+8,y+8,w-16,h-16,11,1.0f,0x000000,120);
+  /* gold rivets in the corners */
+  static const int RX[4]={16,PK_PW-17,16,PK_PW-17}, RY[4]={16,16,PK_PH-17,PK_PH-17};
+  for(int k=0;k<4;k++) for(int j=-4;j<=4;j++) for(int i=-4;i<=4;i++){
+    float dd=sqrtf((float)(i*i+j*j))/4.0f; if(dd>1.0f) continue;
+    float nz=sqrtf(1.0f-dd*dd*0.9f);
+    fb_blend(x+RX[k]+i,y+RY[k]+j,env_map(env_up(i/4.0f*0.9f,j/4.0f*0.9f,nz),1),(int)(255*clampf((1.0f-dd)*5.0f,0,1)));
+  }
+  if(kind==TILE_CLOSED){
+    blit(&pickEmblem,x+w/2-pickEmblem.w/2+3,y+h/2-pickEmblem.h/2+4,0,FBH,255,0,0.0f);
+  } else if(kind==TILE_STOP){
+    for(int k=-3;k<=3;k++){                          /* a dark cross behind the word */
+      fb_line(x+60+k,y+30,x+w-60+k,y+h-30,3,0x4A0008,160);
+      fb_line(x+w-60+k,y+30,x+60+k,y+h-30,3,0x4A0008,160);
+    }
+  }
+}
+
+/* copy a panel out of the framebuffer with its rounded outline as alpha */
+static void grab_rr(spr_t*s,int x,int y,int w,int h,float r){
+  s->w=w; s->h=h;
+  s->px=(uint8_t*)malloc((size_t)w*h*4);
+  if(!s->px) return;
+  for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+    uint32_t c=fb[(y+j)*FBW+x+i];
+    float d=rr_sdf(i+0.5f,j+0.5f,w*0.5f,h*0.5f,w*0.5f,h*0.5f,r);
+    uint8_t*o=s->px+((size_t)j*w+i)*4;
+    o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+    o[3]=(uint8_t)(clampf(0.5f-d,0,1)*255);
+  }
+  spr_bounds(s);
+}
+
+static void paint_bonus_bg(void){
+  /* a velvet stage: deep gradient, a turning fan of light behind the
+     board, spots from above, bokeh, and the gold frame of the screen */
+  for(int y=0;y<FBH;y++){
+    uint32_t c=mixc(0x2A0A40,0x060210,(float)y/FBH);
+    for(int x=0;x<FBW;x++) fb[y*FBW+x]=c;
+  }
+  for(int y=0;y<FBH;y++) for(int x=0;x<FBW;x++){
+    float dx=x-FBW*0.5f, dy=y-400.0f;
+    float a=fast_atan2(dy,dx)*28.0f/TAU; a-=floorf(a);
+    float d=sqrtf(dx*dx/(700.0f*700.0f)+dy*dy/(460.0f*460.0f));
+    float v=clampf(1.0f-d,0,1);
+    float ray=(a<0.5f?1.0f:0.35f)*v*v*0.20f;
+    fb_add(x,y,(int)(ray*230),(int)(ray*90),(int)(ray*200));
+  }
+  for(int i=0;i<60;i++){
+    float bx=hash2(i,21,9u)*FBW, by=hash2(i,22,9u)*FBH, br=6.0f+hash2(i,23,9u)*22.0f;
+    uint32_t bc=(i%3==0)?0xFFD070:((i%3==1)?0xFF60C0:0xA070FF);
+    int cr=(bc>>16)&255, cg=(bc>>8)&255, cb=bc&255;
+    for(int y=(int)(by-br);y<=(int)(by+br);y++) for(int x=(int)(bx-br);x<=(int)(bx+br);x++){
+      if(x<0||y<0||x>=FBW||y>=FBH) continue;
+      float d=sqrtf((x-bx)*(x-bx)+(y-by)*(y-by))/br; if(d>1.0f) continue;
+      float v=clampf((1.0f-d)*5.0f,0,1)*(0.75f+0.25f*smooth01(0.7f,0.95f,d))*0.14f;
+      fb_add(x,y,(int)(cr*v),(int)(cg*v),(int)(cb*v));
+    }
+  }
+  /* the board's glass bed */
+  int bw=3*PK_PW+2*PK_GX+40, bh=3*PK_PH+2*PK_GY+36;
+  fb_softshadow(PK_BX-20,PK_BY-18,bw,bh,22,10,160);
+  fb_glass(PK_BX-20,PK_BY-18,bw,bh,22,0x1A0830,0x05020C,190);
+  fb_moulding(PK_BX-22,PK_BY-20,bw+4,bh+4,24,5.0f,1,255);
+  /* readout plates along the top */
+  static const int PX[3]={120,FBW/2-150,FBW-420}, PWd[3]={300,300,300};
+  for(int k=0;k<3;k++){
+    fb_softshadow(PX[k],80,PWd[k],62,14,6,140);
+    fb_glass(PX[k],80,PWd[k],62,14,0x1C0A30,0x06020E,215);
+    fb_moulding(PX[k]-2,78,PWd[k]+4,66,16,4.0f,1,255);
+  }
+  text("COLLECTED",PX[0]+PWd[0]/2,85,1,0xFFE9A8,1,1);
+  text("MULTIPLIER",PX[1]+PWd[1]/2,85,1,0xFFE9A8,1,1);
+  text("STOPS",PX[2]+PWd[2]/2,85,1,0xFFE9A8,1,1);
+  led_window(PX[0]+14,96,PWd[0]-28,40);
+  fb_moulding(6,4,FBW-12,FBH-8,18,6.0f,1,255);
+  const spr_t*t=&title[TT_PICK];
+  blit(t,FBW/2-t->w/2,42-t->h/2,0,FBH,255,0,0.0f);
+  banner_plate(FBW/2,FBH-30,560,34,0xC060FF);
+}
+
+static void paint_bonus(void){
+  cache_backdrop(&bnbg,paint_bonus_bg);
+  char b[48];
+  /* collected, on an LED readout */
+  seg_num(G.pickTotal,120+300-24,102,9,13,28,0xFFC040,0x3A2804,1);
+  /* the multiplier, big */
+  int m=G.pickMult>0?G.pickMult:1;
+  snprintf(b,sizeof b,"X%d",m);
+  static const uint32_t MG[5]={0xFFFFFF,0xE0FFD8,0x6AE060,0x1E8A2A,0x9AF090};
+  textb(b,FBW/2,98,5,m>1?MG:SILVERG,m>1?5:4,1);
+  /* stops: three lamps, lit as they are found */
+  for(int i=0;i<3;i++){
+    int lit = i < G.pickStops;
+    int cx=FBW-420+70+i*80, cy=112;
+    for(int j=-17;j<=17;j++) for(int k=-17;k<=17;k++){
+      float d=sqrtf((float)(j*j+k*k));
+      if(d>17.0f) continue;
+      uint32_t c;
+      if(d>14.0f) c=env_map(env_up(k/17.0f*0.9f,j/17.0f*0.9f,0.4f),1);
+      else {
+        float nz=sqrtf(1.0f-(d/14.0f)*(d/14.0f)*0.8f);
+        c = lit ? mixc(0x8A0010,0xFFB0A0,clampf(nz*1.1f-0.2f+(-j-k)/40.0f,0,1))
+                : mixc(0x140408,0x4A2030,clampf(nz-0.3f+(-j-k)/40.0f,0,1));
+      }
+      fb_blend(cx+k,cy+j,c,(int)(255*clampf(17.5f-d,0,1)));
+    }
+  }
+  text("THIRD STOP ENDS THE ROUND",FBW-420+150,131,1,0xC8B8E0,1,1);
+  (void)b;
+  /* the board */
+  for(int i=0;i<NPICK;i++){
+    int x,y; pk_tile_xy(i,&x,&y);
+    int kind = !G.pickDone[i] ? TILE_CLOSED
+             : G.pickKind[i]==PICK_STOP ? TILE_STOP
+             : G.pickKind[i]==PICK_MULT ? TILE_MULT : TILE_CREDIT;
+    blit(&tileSpr[kind],x,y,0,FBH,255,0,0.0f);
+    if(!G.pickDone[i]) continue;
+    char v[16];
+    if(kind==TILE_STOP) textb("STOP",x+PK_PW/2,y+PK_PH/2-24,7,REDG,4,1);
+    else if(kind==TILE_MULT){ snprintf(v,sizeof v,"X%d",G.pickVal[i]); textb(v,x+PK_PW/2,y+36,10,GREENG,4,1); }
+    else { commas(v,sizeof v,G.pickVal[i]); textb(v,x+PK_PW/2,y+42,v[3]?7:9,GOLDG,5,1); }
+  }
+  text("D-PAD TO MOVE          A TO PICK",FBW/2,FBH-37,2,0xF0E0FF,1,1);
+}
+
+/* what the board looks like is a function of exactly these */
+static uint32_t bonus_key(void){
+  uint32_t k=(uint32_t)(G.pickStops*131u);
+  for(int i=0;i<NPICK;i++) k = k*33u + (uint32_t)(G.pickDone[i]*(i+1));
+  k = k*33u + (uint32_t)G.pickTotal;
+  k = k*33u + (uint32_t)G.pickMult;
+  return k;
+}
+
+/*  A panel turning over: squash the closed face to nothing, then open
+ *  the revealed one out of it.  Horizontal scale only, nearest-column,
+ *  so it costs one panel's pixels.                                    */
+static void blit_hsquash(const uint32_t*src,int sw,int sx,int sy,int w,int h,
+                         int dx,int dy,float sc,const spr_t*spr){
+  int dw=(int)(w*sc); if(dw<1) return;
+  int x0=dx+(w-dw)/2;
+  for(int j=0;j<h;j++){
+    int y=dy+j;
+    if(y<clip_y0||y>=clip_y1||y<0||y>=FBH) continue;
+    for(int i=0;i<dw;i++){
+      int u=(int)((i+0.5f)/sc);
+      if(u>=w) u=w-1;
+      if(spr){
+        const uint8_t*p=spr->px+((size_t)j*spr->w+u)*4;
+        if(!p[3]) continue;
+        fb_blend(x0+i,y,RGB(p[0],p[1],p[2]),p[3]);
+      } else {
+        uint32_t c=src[(size_t)(sy+j)*sw+sx+u];
+        fb[(size_t)y*FBW+x0+i]=c;
+      }
+    }
+  }
+}
+
+static void draw_bonus(void){
+  uint32_t k=bonus_key();
+  if(!bnimg) bnimg=(uint32_t*)malloc((size_t)FBW*FBH*4);
+  if(!bnimg){ paint_bonus(); return; }
+  if(k!=bnkey){ paint_bonus(); memcpy(bnimg,fb,(size_t)FBW*FBH*4); bnkey=k; }
+  else memcpy(fb,bnimg,(size_t)FBW*FBH*4);
+
+  /* the panel just picked turns over */
+  const float FLIP=0.42f;
+  if(flipIdx>=0 && G.pickT<FLIP+0.5f && bnbg){
+    int x,y; pk_tile_xy(flipIdx,&x,&y);
+    float u=G.pickT/FLIP;
+    if(u<1.0f){
+      /* clear the panel's slot back to the stage */
+      for(int j=0;j<PK_PH;j++){
+        int yy=y+j; if(yy<clip_y0||yy>=clip_y1) continue;
+        memcpy(fb+(size_t)yy*FBW+x,bnbg+(size_t)yy*FBW+x,PK_PW*4);
+      }
+      if(u<0.5f) blit_hsquash(NULL,0,0,0,PK_PW,PK_PH,x,y,1.0f-u*2.0f,&tileSpr[TILE_CLOSED]);
+      else       blit_hsquash(bnimg,FBW,x,y,PK_PW,PK_PH,x,y,(u-0.5f)*2.0f,NULL);
+    }
+    /* a flash as it lands */
+    float f=clampf(1.0f-(G.pickT-FLIP*0.5f)/0.5f,0,1);
+    if(G.pickT>FLIP*0.5f && f>0){
+      int kind=G.pickKind[flipIdx];
+      uint32_t fc = kind==PICK_STOP?0xFF3020:(kind==PICK_MULT?0x60FF80:0xFFD060);
+      (void)fc;
+      blit_add(&pkGlow,x-22,y-22,(int)(255*f));
+      blit_add(&sparkspr,x-7,y-7,(int)(255*f)); blit_add(&sparkspr,x+PK_PW-7,y+PK_PH-7,(int)(255*f));
+    }
+  }
+
+  /* glints drifting over the closed panels */
+  for(int i=0;i<NPICK;i++){
+    if(G.pickDone[i]) continue;
+    int x,y; pk_tile_xy(i,&x,&y);
+    float ph=fmodf(artT*0.8f+dhash(i,3)*4.0f,4.0f);
+    if(ph<0.7f){
+      float pos=-40.0f+ph/0.7f*(PK_PW+120.0f);
+      shine_sprite(&tileSpr[TILE_CLOSED],x,y,0,FBH,pos,22,90,200);
+    }
+  }
+  /* the cursor: a breathing neon frame with sparks running round it */
+  { int x,y; pk_tile_xy(G.pickCur,&x,&y);
+    float pl=0.5f+0.5f*sinf(artT*8.0f);
+    blit_add(&pkGlow,x-22,y-22,(int)(150+106*pl));
+    float per=2.0f*(PK_PW+PK_PH+24);
+    for(int i=0;i<6;i++){
+      float d=fmodf(artT*420.0f+i*per/6.0f,per);
+      int w=PK_PW+12, h=PK_PH+12, sx,sy;
+      if(d<w){ sx=x-6+(int)d; sy=y-6; }
+      else if(d<w+h){ sx=x-6+w; sy=y-6+(int)(d-w); }
+      else if(d<2*w+h){ sx=x-6+w-(int)(d-w-h); sy=y-6+h; }
+      else { sx=x-6; sy=y-6+h-(int)(d-2*w-h); }
+      blit_add(&sparkspr,sx-7,sy-7,230);
+    } }
+}
+
+/* baked at init: the panel faces, and the stage, so no frame of the
+   bonus ever has to paint a full-screen gradient */
+static void build_pick_assets(void){
+  { const int M=22, w=PK_PW+2*M, h=PK_PH+2*M;
+    pkGlow.w=w; pkGlow.h=h;
+    pkGlow.px=(uint8_t*)calloc((size_t)w*h,4);
+    if(pkGlow.px){
+      for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+        float d=rr_sdf(i+0.5f,j+0.5f,w*0.5f,h*0.5f,PK_PW*0.5f+5,PK_PH*0.5f+5,22.0f);
+        float halo=d>0?expf(-d*0.22f):expf(d*0.9f);
+        float tube=clampf(1.6f-fabsf(d)*0.8f,0,1);
+        float r=255*(halo*0.85f+tube), g=210*halo*0.85f+255*tube, b=90*halo*0.85f+255*tube;
+        if(r+g+b<6) continue;
+        uint8_t*o=pkGlow.px+((size_t)j*w+i)*4;
+        o[0]=(uint8_t)clampi((int)r,0,255); o[1]=(uint8_t)clampi((int)g,0,255); o[2]=(uint8_t)clampi((int)b,0,255); o[3]=255;
+      }
+      spr_bounds(&pkGlow);
+    } }
+  uint32_t*save=(uint32_t*)malloc(sizeof bg);
+  if(!save) return;
+  memcpy(save,fb,sizeof bg);
+  for(int k=0;k<NTILE;k++){
+    fb_rrect(100,100,PK_PW,PK_PH,18,0x000000,255);
+    paint_tile(100,100,k);
+    grab_rr(&tileSpr[k],100,100,PK_PW,PK_PH,18.0f);
+  }
+  if(!bnbg){
+    paint_bonus_bg();
+    bnbg=(uint32_t*)malloc(sizeof bg);
+    if(bnbg) memcpy(bnbg,fb,sizeof bg);
+  }
+  memcpy(fb,save,sizeof bg);
+  free(save);
+}
+
 static void draw_overlays(void){
   char b[96];
-  if(G.inFree && (G.state==ST_IDLE||G.state==ST_SPIN||G.state==ST_EVAL||G.state==ST_SHOWWIN)){
-    int bw2=GW+12, bx2=GX-6;
-    fb_rrect(bx2,GY-34,bw2,28,8,0x04140A,240);
-    fb_rframe(bx2,GY-34,bw2,28,8,2.0f,0x7CFF6A,255);
-    snprintf(b,sizeof b,"FREE SPINS  -  %d LEFT  -  MULTIPLIER X%d  -  WON %d",
-             G.freeSpins,G.fsMult<1?1:G.fsMult,G.fsWon);
-    text(b,GX+GW/2,GY-27,2,0x7CFF6A,1,1);
-  }
+  if(G.inFree && (G.state==ST_IDLE||G.state==ST_SPIN||G.state==ST_EVAL||G.state==ST_SHOWWIN))
+    draw_fsbar();                       /* the top box turns into the feature's status bar */
   switch(G.state){
-  case ST_ATTRACT:
-    dim(160);
-    textb("WILD 7's",FBW/2,120,10,GOLDG,5,1);
-    text("WINS READ LEFT TO RIGHT   -   3, 4 OR 5 REELS   -   EVERY PATH PAYS",FBW/2,262,3,0xFFFFFF,1,1);
-    text("EVERY WILD DOUBLES   -   FREE SPINS TO X5   -   JACKPOTS SCALE WITH YOUR BET",FBW/2,302,3,0x9FE8FF,1,1);
-    snprintf(b,sizeof b,"ULTIMATE JACKPOT   %lld",jp_value(JP_ULT));
-    textb(b,FBW/2,340,5,RAINBOWG,6,1);
-    if(((int)(G.t*2.0f))&1) textb("PRESS START",FBW/2,420,6,SILVERG,4,1);
-    text("SELECT = PAY TABLE       X = MAX BET       Y = ADD CREDITS",FBW/2,508,2,0xAFAFC8,1,1);
-    break;
-  case ST_FSINTRO: {
-    dim(200);
-    float sc=1.0f+0.12f*sinf(G.t*7.0f);
-    int px=(int)(11*sc); if(px<7)px=7;
-    textb("FREE SPINS",FBW/2,200,px,GREENG,4,1);
-    snprintf(b,sizeof b,"%d SCATTERS",G.scatCount);
-    text(b,FBW/2,348,4,0xFFFFFF,1,1);
-    text(G.inFree?"4 MORE FREE SPINS":"8 FREE SPINS  -  EXPANDING WILDS  -  EVERY ONE CLIMBS THE MULTIPLIER",
-         FBW/2,404,2,0x9FE8FF,1,1);
-    break; }
-  case ST_BONUSEND:
-    dim(200);
-    if(G.banner==3){
-      textb("FREE SPINS COMPLETE",FBW/2,200,6,GREENG,4,1);
-      snprintf(b,sizeof b,"TOTAL WON  %d",G.fsWon);
-      textb(b,FBW/2,326,7,GOLDG,5,1);
-    } else {
-      textb("BONUS COMPLETE",FBW/2,200,7,GOLDG,5,1);
-      snprintf(b,sizeof b,"%d  X%d  =  %d",G.pickTotal,G.pickMult>0?G.pickMult:1,
-               G.pickTotal*(G.pickMult>0?G.pickMult:1));
-      textb(b,FBW/2,326,6,SILVERG,4,1);
-    }
-    break;
-  case ST_BROKE:
-    dim(190);
-    textb("OUT OF CREDITS",FBW/2,248,7,REDG,4,1);
-    if(((int)(G.t*2.0f))&1) text("PRESS START TO ADD CREDITS",FBW/2,382,4,0xFFFFFF,1,1);
-    break;
+  case ST_ATTRACT:  draw_attract();  break;
+  case ST_FSINTRO:  draw_fsintro();  break;
+  case ST_BONUSEND: draw_bonusend(); break;
+  case ST_BROKE:    draw_broke();    break;
   case ST_ADDCR:
     draw_addcr();
     break;
@@ -3459,6 +5759,32 @@ static void draw_overlays(void){
  *  when a state timer resets.                                          */
 static float mqT;
 
+/*  The art's own clocks and caches.  They advance here, from update(),
+ *  so no draw function ever writes state: the band renderer runs every
+ *  draw once per band, and a clock bumped in a draw would run three
+ *  times as fast.  None of this is game state, so none of it is saved.  */
+static int   bgShown = 0;       /* which cabinet look is in bg[]        */
+static int   pickSeen[NPICK];   /* the pick board as last seen          */
+static void art_update(void){
+  artT += DT;
+  mqT  += DT;
+  for(int i=0;i<NBTN;i++) if(btnFlash[i]>0) btnFlash[i]-=DT;
+  /* free spins get their own cabinet: night sky, gilded drums */
+  int fs = G.inFree || G.state==ST_FSINTRO || (G.state==ST_BONUSEND && G.banner==3);
+  if(fs!=bgShown && bgBase && bgFree){ memcpy(bg,fs?bgFree:bgBase,sizeof bg); bgShown=fs; }
+  /* the pick board: time the turn of the panel just picked */
+  if(G.state==ST_BONUS || G.state==ST_BONUSEND){
+    G.pickT += DT;
+    for(int i=0;i<NPICK;i++){
+      if(G.pickDone[i] && !pickSeen[i]) flipIdx=i;
+      pickSeen[i]=G.pickDone[i];
+    }
+  } else {
+    for(int i=0;i<NPICK;i++) pickSeen[i]=0;
+    flipIdx=-1;
+  }
+}
+
 /* fixed-size text with no auto-fit, glyphs off screen skipped: the ticker */
 static void text_run(const char*s,int x,int y,int px,uint32_t col,int shadow){
   int n=(int)strlen(s), adv=px*6;
@@ -3495,79 +5821,161 @@ static void commas(char*out,size_t n,long long v){
   out[o]=0;
 }
 
-static void draw_marquee(void){
-  mqT += DT;
-  float lim = opt_limiter ? 0.6f : 1.0f;
+/*  The sign in the middle of the top box: a lit plate with the logo on
+ *  it, baked once with rounded, transparent corners so the ticker can
+ *  pass behind it.  The logo's halo is kept apart as an additive sprite
+ *  so it can breathe.                                                 */
+static spr_t mqPlate, logoGlow;
+static uint8_t beamLUT[161];
+static int logoX, logoY;               /* where the logo sits in the plate */
 
-  /* 1. a slow shimmer sweeping the red face */
-  for(int y=8;y<MQH-8;y++){
-    for(int x=12;x<FBW-12;x++){
-      float ph=fmodf((float)x + y*1.4f - mqT*240.0f, 520.0f);
-      if(ph<0) ph+=520.0f;
-      if(ph>=110.0f) continue;
-      float v=sinf(ph/110.0f*3.14159f)*lim;
-      fb_add(x,y,(int)(v*46),(int)(v*22),(int)(v*8));
+static void build_marquee(void){
+  int x=MQPX, y=MQPY, w=MQPW, h=MQPH;
+  uint32_t*save=(uint32_t*)malloc((size_t)(w+8)*(h+8)*4);
+  if(!save) return;
+  for(int j=0;j<h+8;j++) for(int i=0;i<w+8;i++){
+    int fx=x-4+i, fy=y-4+j;
+    save[j*(w+8)+i]=((unsigned)fx<FBW&&(unsigned)fy<FBH)?fb[fy*FBW+fx]:0;
+  }
+  fb_rrectg(x,y,w,h,14,0x4A0818,0x0C0104,255);
+  for(int j=0;j<h;j++) for(int i=0;i<w;i++){          /* a lamp behind the lettering */
+    float dx=(i-w*0.5f)/(w*0.5f), dy=(j-h*0.55f)/(h*0.8f), d=dx*dx+dy*dy;
+    float v=clampf(1.0f-d,0,1); v*=v;
+    fb_add(x+i,y+j,(int)(v*110),(int)(v*36),(int)(v*10));
+  }
+  for(int j=0;j<h/2;j++) for(int i=6;i<w-6;i++) fb_blend(x+i,y+2+j,0xFFFFFF,(h/2-j)/2);
+  fb_moulding(x,y,w,h,14,4.0f,1,255);
+  const spr_t*L=&title[TT_LOGO];
+  logoX=x+w/2-L->w/2; logoY=y+h/2-L->h/2+1;
+  blit(L,logoX,logoY,y+3,y+h-3,255,0,0.0f);
+  /* grab it with the plate's rounded outline as its alpha */
+  mqPlate.w=w; mqPlate.h=h;
+  mqPlate.px=(uint8_t*)malloc((size_t)w*h*4);
+  if(mqPlate.px){
+    for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+      uint32_t c=fb[(y+j)*FBW+x+i];
+      float d=rr_sdf(i+0.5f,j+0.5f,w*0.5f,h*0.5f,w*0.5f,h*0.5f,14);
+      uint8_t*o=mqPlate.px+((size_t)j*w+i)*4;
+      o[0]=(uint8_t)((c>>16)&255); o[1]=(uint8_t)((c>>8)&255); o[2]=(uint8_t)(c&255);
+      o[3]=(uint8_t)(clampf(0.5f-d,0,1)*255);
+    }
+    spr_bounds(&mqPlate);
+  }
+  for(int j=0;j<h+8;j++) for(int i=0;i<w+8;i++){
+    int fx=x-4+i, fy=y-4+j;
+    if((unsigned)fx<FBW&&(unsigned)fy<FBH) fb[fy*FBW+fx]=save[j*(w+8)+i];
+  }
+  free(save);
+  /* the logo's breathing halo: its alpha, blurred, in a hot orange */
+  { int gw=L->w, gh=L->h;
+    float*a=(float*)calloc((size_t)gw*gh,4), *t=(float*)malloc((size_t)gw*gh*4);
+    logoGlow.w=gw; logoGlow.h=gh;
+    logoGlow.px=(uint8_t*)calloc((size_t)gw*gh,4);
+    if(a&&t&&logoGlow.px){
+      for(int i=0;i<gw*gh;i++) a[i]=L->px[i*4+3]>200?1.0f:0.0f;
+      box_blur_f(a,t,gw,gh,3,3);
+      for(int i=0;i<gw*gh;i++){
+        float v=clampf(a[i]*1.6f,0,1)*(L->px[i*4+3]>200?0.35f:1.0f);
+        uint8_t*o=logoGlow.px+i*4;
+        o[0]=(uint8_t)(255*v); o[1]=(uint8_t)(120*v); o[2]=(uint8_t)(40*v); o[3]=v>0.01f?255:0;
+      }
+      spr_bounds(&logoGlow);
+    }
+    free(a); free(t); }
+  for(int i=0;i<161;i++){ float u=(i-80)/80.0f, v=1.0f-u*u; beamLUT[i]=(uint8_t)(v*v*255); }
+}
+
+static void draw_marquee(void){
+  float lim = opt_limiter ? 0.6f : 1.0f;
+  int y0=8>clip_y0?8:clip_y0, y1=(MQH-8)<clip_y1?(MQH-8):clip_y1;
+
+  /* 1. two searchlights sweeping the face, leaning with their swing */
+  for(int b=0;b<2 && y0<y1;b++){
+    float ph=mqT*(0.42f+b*0.17f)+b*2.4f;
+    float cxb=FBW*0.5f+sinf(ph)*(FBW*0.5f-40.0f), slope=cosf(ph)*2.2f*(b?-1:1);
+    int kr=(int)(62*lim), kg=(int)(54*lim), kb=(int)(40*lim);
+    for(int y=y0;y<y1;y++){
+      int c=(int)(cxb+(y-MQH*0.5f)*slope);
+      int xa=c-80, xb=c+80;
+      if(xa<12) xa=12;
+      if(xb>FBW-13) xb=FBW-13;
+      uint32_t*row=fb+(size_t)y*FBW;
+      for(int x=xa;x<=xb;x++){
+        int v=beamLUT[x-c+80];
+        uint32_t d=row[x];
+        int r=((d>>16)&255)+(kr*v>>8), g=((d>>8)&255)+(kg*v>>8), bl=(d&255)+(kb*v>>8);
+        row[x]=RGB(r>255?255:r,g>255?255:g,bl>255?255:bl);
+      }
     }
   }
 
-  /* 2. the ticker, passing behind the sign */
-  char pot[24], tk[400];
+  /* 2. the ticker, passing behind the sign (free spins put their own
+     status bar over it, so it rests then) */
+  char pot[24], tk[520];
+  if(!G.inFree){
   commas(pot,sizeof pot,jp_value(JP_ULT));
   snprintf(tk,sizeof tk,
-    "  *  WINS READ LEFT TO RIGHT, REEL TO REEL  *  3, 4 OR 5 REELS PAY  *  EVERY PATH IS A WAY  *  "
-    "EVERY WILD 7 DOUBLES THE WIN  *  FOUR JACKPOTS, EVERY ONE A MULTIPLE OF YOUR BET  *  ULTIMATE NOW %s  *  "
-    "FREE SPINS: THE MULTIPLIER CLIMBS TO X5 AND NEVER FALLS BACK  *  LUCKY 7 PICK BONUS  *  "
-    "BET 10 TO 10,000  ",pot);
+    "  *  WAYS PAY - LEFT TO RIGHT, REEL TO REEL  *  EVERY WILD 7 DOUBLES THE WIN  *  "
+    "FREE SPINS - THE MULTIPLIER CLIMBS TO X5  *  LUCKY 7 PICK BONUS  *  "
+    "HOLD & SPIN - 6 OR MORE LUCKY COINS  *  WHEEL OF 7'S - 3 WHEELS ON REELS 2, 3 AND 4  *  "
+    "7 STRIKE - RANDOM WILDS  *  GAMBLE ANY WIN  *  4 PROGRESSIVE JACKPOTS - ULTIMATE NOW %s  ",pot);
   int tw=(int)strlen(tk)*12;
-  int off=(int)fmodf(mqT*120.0f,(float)tw);
-  text_run(tk,20-off,   MQH/2-7,2,0xFFF0C0,1);
-  text_run(tk,20-off+tw,MQH/2-7,2,0xFFF0C0,1);
+  int off=(int)fmodf(mqT*110.0f,(float)tw);
+  text_run(tk,20-off,   MQH/2-7,2,0xFFF4D0,1);
+  text_run(tk,20-off+tw,MQH/2-7,2,0xFFF4D0,1);
+  }
 
-  /* 3. the title sign */
-  const int pw=300, ph2=MQH-12, px0=FBW/2-pw/2, py0=6;
-  fb_rrect(px0-4,py0-2,pw+8,ph2+4,14,0x000000,160);
-  fb_rrectg(px0,py0,pw,ph2,12,0x3A0810,0x120206,255);
+  /* 3. the sign, its halo breathing, a shine crossing the logo */
+  blit(&mqPlate,MQPX,MQPY,0,FBH,255,0,0.0f);
   float pulse=0.5f+0.5f*sinf(mqT*3.4f);
-  uint32_t rm[5];
-  for(int k=0;k<5;k++) rm[k]=mixc(GOLDG[k],0xFFFFFF,pulse*lim*(k<2?0.55f:0.25f));
-  textb("WILD 7's",FBW/2,py0+3,4,rm,5,1);
-  /* shine: a diagonal white band sweeping the sign every couple of seconds */
-  float sx=fmodf(mqT*300.0f,(float)(pw+520))-260.0f+px0;
-  for(int y=py0+2;y<py0+ph2-2;y++){
-    float cx=sx+(y-py0)*0.9f;
-    for(int x=(int)(cx-26);x<=(int)(cx+26);x++){
-      if(x<px0+2||x>=px0+pw-2) continue;
-      float v=(1.0f-fabsf(x-cx)/26.0f)*lim;
-      fb_add(x,y,(int)(v*120),(int)(v*110),(int)(v*80));
-    }
-  }
-  fb_rframe(px0,py0,pw,ph2,12,2.5f,mixc(0xF0C24A,0xFFFFFF,pulse*0.5f),255);
+  blit_add(&logoGlow,logoX,logoY,(int)((70+150*pulse)*lim));
+  float sx=fmodf(mqT*260.0f,(float)(title[TT_LOGO].w+700))-120.0f;
+  shine_sprite(&title[TT_LOGO],logoX,logoY,MQPY,MQPY+MQPH,sx,18,(int)(190*lim),150);
 
-  /* 4. two colours of bulb chasing round the edge, faster than before */
-  int n=(FBW-40)/26;
+  /* 4. bulbs round the edge: chase, then all-blink, then a fill sweep */
+  int n=(FBW-40)/26, mode=((int)(mqT/5.0f))%3;
+  float mt=fmodf(mqT,5.0f);
   for(int i=0;i<n;i++){
-    float phz=mqT*5.0f - i*0.55f;
-    float v=0.5f+0.5f*sinf(phz);
-    if(opt_limiter) v=0.35f+v*0.5f;
-    uint32_t warm=(i&1)?0xFFE9A0:0xFF5A3A, dark=(i&1)?0x5A3A08:0x4A1008;
-    uint32_t c=mixc(dark,warm,v);
-    int x=22+i*26, a=(int)(90+v*165);
-    for(int j=-3;j<=3;j++) for(int k=-3;k<=3;k++)
-      if(j*j+k*k<=9){ fb_blend(x+k,MQH-9+j,c,a); if(x<px0-8||x>px0+pw+8) fb_blend(x+k,9+j,c,a); }
-    if(v>0.85f){ fb_add(x,MQH-9,60,40,10); }
+    float v;
+    if(mode==0)      v=0.5f+0.5f*sinf(mqT*6.0f-i*0.60f);
+    else if(mode==1) v=((((int)(mqT*4.0f))+i)&1)?1.0f:0.15f;
+    else             v=(i <= (int)(mt/4.0f*(n+1))) ? 1.0f : 0.2f;
+    if(opt_limiter) v=0.25f+v*0.55f;
+    int x=22+i*26;
+    int k=(int)(v*255);
+    blit_add(&bulbspr[i&1],x-9,MQH-9-9,k);
+    if(x<MQPX-10||x>MQPX+MQPW+10) blit_add(&bulbspr[i&1],x-9,9-9,k);
   }
 
-  /* 5. sparkles: a dozen twinkling crosses wandering the face */
-  for(int i=0;i<12;i++){
+  /* 5. glints wandering the face */
+  for(int i=0;i<7;i++){
     float ph=mqT*1.7f+i*2.39f;
-    float tw2=sinf(ph*3.1f); if(tw2<0.3f) continue;
-    float x=fmodf(i*137.0f + mqT*(18.0f+i*3.0f), (float)(FBW-40))+20.0f;
+    float tw2=sinf(ph*3.1f); if(tw2<0.35f) continue;
+    float x=fmodf(i*181.0f + mqT*(16.0f+i*3.0f), (float)(FBW-40))+20.0f;
     float y=14.0f+fmodf(i*11.0f, (float)(MQH-28));
-    if(x>px0-10&&x<px0+pw+10) continue;
-    int r=1+(int)(tw2*4), a=(int)(tw2*220*lim);
-    for(int k=-r;k<=r;k++){ fb_blend((int)x+k,(int)y,0xFFFFFF,a); fb_blend((int)x,(int)y+k,0xFFFFFF,a); }
-    fb_blend((int)x,(int)y,0xFFFFFF,255);
+    if(x>MQPX-10&&x<MQPX+MQPW+10) continue;
+    blit_add(&sparkspr,(int)x-7,(int)y-7,(int)(tw2*230*lim));
   }
+}
+
+/*  Everything the art bakes at init, freed on the way out.            */
+static void spr_free(spr_t*s){ free(s->px); free(s->rx0); free(s->rx1); memset(s,0,sizeof *s); }
+static void art_free(void){
+  for(int i=0;i<NSYM;i++){ spr_free(&symb2[i]); spr_free(&symBig[i]); }
+  for(int k=0;k<NFLAME;k++) spr_free(&symfl[k]);
+  free(bgBase); bgBase=NULL; free(bgFree); bgFree=NULL; bgShown=0;
+  free(s7bg); free(s7fg); s7bg=s7fg=NULL; s7cached=0;
+  free(medalRing); medalRing=NULL;
+  spr_free(&domehalo); spr_free(&bulbspr[0]); spr_free(&bulbspr[1]); spr_free(&sparkspr);
+  for(int i=0;i<NBTN;i++){ spr_free(&btnspr[i][0]); spr_free(&btnspr[i][1]); }
+  spr_free(&mqPlate); spr_free(&logoGlow);
+  spr_free(&fireStrip);
+  spr_free(&pickEmblem);
+  for(int k=0;k<NTILE;k++) spr_free(&tileSpr[k]);
+  spr_free(&pkGlow);
+  free(rayAng); free(rayFall); rayAng=rayFall=NULL;
+  for(int k=0;k<NFF;k++) spr_free(&fireFade[k]);
+  free_titles();
 }
 
 /* ═══ FEATURE MODULES (unity build) ═══════════════════════════════
@@ -3653,6 +6061,7 @@ void retro_deinit(void){
   }
   free(glowspr.px); glowspr.px=NULL;
   free(washspr.px); washspr.px=NULL;
+  art_free();                             /* everything the art baked */
   for(int i=0;i<2;i++){ free(domespr[i].px); domespr[i].px=NULL; }
   assets_ready=0;
 }
