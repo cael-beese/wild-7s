@@ -63,7 +63,7 @@ static int opt_turbo    = 0;   /* faster reel spins                    */
  *    WILD7_AUTOPILOT=1  spin loop   =2 pay table   =5 features page
  *                    =3  one spin   =4 add credits =6 climb the bet
  *                    =3  a single spin, then no further input
- *    WILD7_FORCE=free|pick             land a bonus trigger
+ *    WILD7_FORCE=free|pick|hold        land a bonus trigger
  *    WILD7_FORCE=mega|minor           force the jackpot roll to hit
  * ──────────────────────────────────────────── */
 static int dbg_pilot = 0, dbg_force = 0;
@@ -1426,11 +1426,16 @@ static uint8_t strip[NREEL][STRIPLEN];
    place; the shipped values are the ones written here.                */
 static uint8_t CNT[3][NSYM] = {
 /*  COIN (hold & spin) lands on every reel as singles; WHEEL lands on
- *  reels 2, 3 and 4 only, one showing per reel at most.  These counts are
- *  PROVISIONAL - taken out of the low fruit - until the maths pass.     */
+ *  reels 2, 3 and 4 only, one showing per reel at most.  WHEEL is still
+ *  PROVISIONAL.  COIN is 8 / 7 / 6 (outer / 2,4 / middle): six coins on
+ *  25 cells need a reel showing two, and singles only share a window
+ *  where the shuffle happens to put two close, so the trigger rate is a
+ *  property of the LAYOUT as much as the count - 1 in ~199 base spins
+ *  with these strips.  Any change to this table reshuffles them: re-run
+ *  w7sim and check the hold & spin line.                              */
 /*        7   D   B  BAR  GR  OR  PL  CH  LE  ST  CR  JP  UL  CO  WH  */
-  {       2,  8,  9, 10, 11, 11, 12, 11,  9,  2,  3,  0,  2,  6,  0 },  /* reels 1,5 */
-  {       2,  8,  9, 10, 11, 11, 11, 11, 10,  1,  0,  3,  1,  6,  2 },  /* reels 2,4 */
+  {       2,  8,  9, 10, 11, 11, 12, 10,  8,  2,  3,  0,  2,  8,  0 },  /* reels 1,5 */
+  {       2,  8,  9, 10, 11, 11, 11, 11,  9,  1,  0,  3,  1,  7,  2 },  /* reels 2,4 */
   {       2,  8,  9, 10, 10, 11, 11, 10,  8,  2,  3,  3,  1,  6,  2 },  /* reel 3    */
 };
 static uint8_t STK[3][NSYM] = {
@@ -2127,6 +2132,7 @@ static int force_demand(int r,int*symo,int*rows){
     if(r==2){ *symo=SY_JACKPOT; rows[0]=1; rows[1]=2; rows[2]=3; return 3; }
     return 0;
   case 6:  *symo=SY_ULT; rows[0]=2; return 1;                                  /* ult   */
+  case 7:  *symo=SY_COIN; return hold_force_rows(r,rows);                      /* hold  */
   }
   return 0;
 }
@@ -3613,7 +3619,8 @@ void retro_init(void){
     if((e=getenv("WILD7_FORCE")))
       dbg_force = !strcmp(e,"free")?1:(!strcmp(e,"pick")?2:
                   (!strcmp(e,"win")?3:(!strcmp(e,"mega")?4:
-                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:0)))));
+                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:
+                  (!strcmp(e,"hold")?7:0))))));
   }
   if(!assets_ready){
     build_strips();
