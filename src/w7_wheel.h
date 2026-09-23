@@ -12,6 +12,7 @@ typedef struct {
   int   potTier;        /* JP_* tier won, -1 for a credit prize           */
   int   frame, nFrames; /* main-spin frame counter and its length         */
   int   spins;          /* spins taken this feature                       */
+  int   tense;          /* the crawl's tension note has sounded           */
   long long prize;      /* credits the feature pays                       */
   long long shown;      /* the counter rolling up to it                   */
   float t;              /* seconds in the phase                           */
@@ -21,7 +22,7 @@ typedef struct {
   float ang0, dAng;     /* start of the main spin and its total travel    */
   float vSum;           /* normaliser: the spin lands exactly on target   */
   float ptr, ptrV;      /* pointer deflection (degrees, + = tip right)    */
-  float hot;            /* 0..1 landed-wedge glow                         */
+  float hot;            /* phase time the prize counter finished rolling  */
 } wheel_state_t;
 
 static void art_wheel(void);           /* sprite art, called at init         */

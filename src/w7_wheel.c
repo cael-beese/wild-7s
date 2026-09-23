@@ -867,6 +867,51 @@ static void wh_build_ptr_rot(void){
   }
 }
 
+/*  Light rays that turn slowly behind the wheel on a big prize.  Only
+ *  the strip between the panels and outside the rim can show them, so
+ *  that is all that is mapped: per pixel, its angle round the wheel and
+ *  how strongly a ray lights it.  The draw is a table lookup and an add. */
+#define WR_X0 320
+#define WR_X1 960
+static uint16_t *whRayMap;
+static uint8_t   whRayPat[256];
+
+static void wh_build_rays(void){
+  whRayMap=(uint16_t*)malloc((size_t)(WR_X1-WR_X0)*FBH*2);
+  if(!whRayMap) return;
+  for(int i=0;i<256;i++){
+    float v=cosf(i*TAU*12.0f/256.0f); v=v>0?v*v*v:0;
+    whRayPat[i]=(uint8_t)(v*255);
+  }
+  for(int y=0;y<FBH;y++) for(int x=WR_X0;x<WR_X1;x++){
+    float dx=x+0.5f-WH_CX, dy=y+0.5f-WH_CY, d=sqrtf(dx*dx+dy*dy);
+    uint16_t m=0;
+    if(d>WH_RRIM+2){
+      float f=clampf((d-WH_RRIM-2)/26.0f,0,1)*clampf(1.0f-(d-WH_RRIM)/520.0f,0,1);
+      int a=(int)((atan2f(dx,-dy)/TAU+1.0f)*256.0f)&255;
+      m=(uint16_t)((a<<8)|(int)(f*255));
+    }
+    whRayMap[(size_t)y*(WR_X1-WR_X0)+(x-WR_X0)]=m;
+  }
+}
+
+static void wh_rays(float rot,uint32_t col,float k){
+  if(!whRayMap || k<=0.0f) return;
+  int ro=(int)(rot*256.0f)&255, K=(int)(k*256.0f);
+  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
+  int y0=clip_y0<0?0:clip_y0, y1=clip_y1>FBH?FBH:clip_y1;
+  for(int y=y0;y<y1;y++){
+    const uint16_t*m=whRayMap+(size_t)y*(WR_X1-WR_X0);
+    for(int x=WR_X0;x<WR_X1;x++){
+      uint16_t v=m[x-WR_X0];
+      int f=v&255; if(!f) continue;
+      int s=(whRayPat[((v>>8)+ro)&255]*f*K)>>16;
+      if(s<=2) continue;
+      fb_add(x,y,(cr*s)>>8,(cg*s)>>8,(cb*s)>>8);
+    }
+  }
+}
+
 static void wh_build(void){
   if(whBuilt) return;
   whBuilt=1;
@@ -876,6 +921,7 @@ static void wh_build(void){
   whFB[0].face=0; whFB[1].face=1;
   while(wh_face_step(&whFB[0])) {}             /* the SUPER face: see wh_build_more */
   wh_build_gloss();
+  wh_build_rays();
   if(whStage) wh_build_stage();
 }
 
@@ -940,6 +986,7 @@ static void wh_label(int face,int w,char*b,size_t n){
 static void wheel_begin(void){
   wheel_state_t*W=&G.wheel;
   float keep=wh_phi(-W->ang);                  /* the wheel stays where it stopped */
+  if(keep==0.0f) keep=360.0f-WH_WDEG*0.5f;     /* a fresh machine shows SUPER on top */
   memset(W,0,sizeof *W);
   W->ang=keep; W->landed=-1; W->potTier=-1;
   W->lastPeg=wh_wedge_at(keep);
@@ -968,7 +1015,7 @@ static void wh_start(wheel_state_t*W){
   float s=0;
   for(int i=1;i<=W->nFrames;i++) s+=wh_shape((i-0.5f)/W->nFrames);
   W->vSum=s>0.0001f?s:1.0f;
-  W->frame=0; W->landed=-1; W->spins++;
+  W->frame=0; W->landed=-1; W->spins++; W->tense=0;
   W->phase=WPH_WIND; W->t=0;
   snd(150,90,0.45f,2,0.10f);                   /* the wind-up creak */
   snd_noise(0.35f,0.05f,600);
@@ -981,6 +1028,13 @@ static void wh_tick(wheel_state_t*W){
   snd(p,p*0.62f,0.022f,0,v*0.55f);
   snd_noise(0.020f,v,sp<2.0f?5200.0f:7000.0f);
   if(sp<1.2f) snd(170,110,0.05f,2,v*0.5f);      /* the slow ones clunk */
+  /* in the crawl every clack also rings a semitone higher than the last */
+  if(W->phase==WPH_SPIN && sp<2.2f){
+    int n=W->tense<14?W->tense:14; W->tense++;
+    float f=392.0f*powf(1.0595f,(float)n);
+    snd(f,f,0.16f,1,0.07f);
+    snd(f*2.0f,f*2.0f,0.10f,0,0.02f);
+  }
 }
 
 /* the flapper: pegs push it, a spring swings it back */
@@ -1177,7 +1231,7 @@ static void wh_disc_rows(uint32_t*base,int stride,int ox,int oy,int y0,int y1,
     float h2=R*R-dy*dy; if(h2<=0) continue;
     float hw=sqrtf(h2);
     int xa=(int)ceilf(WH_CX-hw+0.5f), xb=(int)floorf(WH_CX+hw-1.5f);   /* fully inside */
-    uint32_t*row=base+(ptrdiff_t)(y-oy)*stride-ox;
+    uint32_t*row=base+(long)(y-oy)*stride-ox;
     const uint16_t*gl=whGloss+(size_t)(y-(WH_CY-WH_RF-1))*WH_GW-(WH_CX-WH_RF-1);
     float g2=HR*HR-dy*dy;
     if(g2>0){
@@ -1272,6 +1326,7 @@ static void wh_hot_wedge(float k,uint32_t col){
   float n0x=cosf(a0), n0y=sinf(a0), n1x=-cosf(a1), n1y=-sinf(a1);
   int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
   for(int y=WH_CY-WH_RF;y<WH_CY-WH_RTRIM+4;y++){
+    if(y<clip_y0||y>=clip_y1) continue;
     float dy=y+0.5f-WH_CY;
     int span=(int)(-dy*0.28f)+6;
     for(int x=WH_CX-span;x<=WH_CX+span;x++){
@@ -1372,7 +1427,7 @@ static void wh_bulbs(void){
     int bx=(int)lrintf(WH_CX+sinf(a)*WH_RBULB), by=(int)lrintf(WH_CY-cosf(a)*WH_RBULB);
     uint32_t col = W->face ? wh_hsv(k/(float)WH_NBULB+W->anim*0.05f,0.65f,1.0f)
                            : ((k&1)?0xFFD040:0xFF5038);
-    blit(&whBulb,bx-10,by-10,0,FBH,(int)(v*255),col,0.35f);
+    blit(&whBulb,bx-10,by-10,clip_y0,clip_y1,(int)(v*255),col,0.35f);
     int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255, vi=(int)(v*0.6f*256.0f);
     for(int j=0;j<WH_HALO;j++){
       int y=by-WH_HALO/2+j;
@@ -1394,6 +1449,19 @@ static void wheel_draw(void){
     if(y1>y0) memcpy(fb+(size_t)y0*FBW,whStage+(size_t)y0*FBW,(size_t)(y1-y0)*FBW*4);
   }
   wh_disc();
+  /* big prizes and every pot get rays fanning out behind the wheel (the
+     rays live outside the rim, so they go on after the cached square) */
+  if(wh_hot(W)>=0){
+    const wedge_t*e=&wh_table(W->face)[W->landed];
+    if(e->kind!=WK_CR || e->val>=25){
+      float k = W->phase==WPH_LANDED ? clampf(W->t*1.5f,0,1)*0.6f : clampf(0.6f+W->t,0,1);
+      k*=opt_limiter?0.45f:0.75f;
+      uint32_t rc = e->kind==WK_POT ? (e->val==JP_MEGA ? wh_hsv(W->anim*0.15f,0.55f,1.0f)
+                                                       : (e->val==JP_MAJOR?0xFFC040:0x9AD0FF))
+                                    : (e->kind==WK_UP ? 0xFF8AC8 : 0xFFD060);
+      wh_rays(W->anim*0.05f,rc,k);
+    }
+  }
   /* the winner glows, and lights run round its border */
   if(wh_hot(W)>=0){
     float pl=0.5f+0.5f*sinf(W->anim*(opt_limiter?5.0f:10.0f));
@@ -1407,9 +1475,9 @@ static void wheel_draw(void){
   for(int k=0;k<WH_NW && fabsf(W->vel)<=0.9f;k++){
     float a=(k*WH_WDEG+W->ang)*(TAU/360.0f);
     int px=(int)lrintf(WH_CX+sinf(a)*WH_RPEG), py=(int)lrintf(WH_CY-cosf(a)*WH_RPEG);
-    blit(&whPeg,px-8,py-8,0,FBH,255,0,0.0f);
+    blit(&whPeg,px-8,py-8,clip_y0,clip_y1,255,0,0.0f);
   }
-  blit(&whHub,WH_CX-70,WH_CY-70,0,FBH,255,0,0.0f);
+  blit(&whHub,WH_CX-70,WH_CY-70,clip_y0,clip_y1,255,0,0.0f);
   wh_bulbs();
   /* the flapper, its shadow on the face first */
   {
@@ -1417,10 +1485,10 @@ static void wheel_draw(void){
     i=clampi(i,0,WH_PN-1);
     const spr_t*ps=&whPtrRot[i];
     int px=WH_CX-whPtrPiv[i][0], py=WH_PIVY-whPtrPiv[i][1];
-    blit_wash(ps,px+7,py+9,0,FBH,0x000000,0.45f);
-    blit(ps,px,py,0,FBH,255,0,0.0f);
+    blit_wash(ps,px+7,py+9,clip_y0,clip_y1,0x000000,0.45f);
+    blit(ps,px,py,clip_y0,clip_y1,255,0,0.0f);
   }
-  blit(&whKnob,WH_CX-16,WH_PIVY-16,0,FBH,255,0,0.0f);
+  blit(&whKnob,WH_CX-16,WH_PIVY-16,clip_y0,clip_y1,255,0,0.0f);
 
   /* left panel: live pots */
   for(int i=0;i<3;i++){
@@ -1469,6 +1537,8 @@ static void wheel_draw(void){
       wh_label(W->face,W->landed,b,sizeof b);
       text(b,1112,400,3,0xFFFFFF,1,1);
     }
+    if(W->phase==WPH_PRIZE && W->prize>0 && W->shown>=W->prize && (((int)(W->anim*2.5f))&1))
+      text("PRESS A TO COLLECT",1112,460,2,0x7CFF6A,1,1);
     break;
   }
   if(W->spins>0 || W->face) {
