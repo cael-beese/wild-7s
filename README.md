@@ -428,8 +428,27 @@ Things the simulation caught that reading the code did not:
 
 ## Performance
 
-Measured on the Pi with `retroarch --max-frames=1800` under the null video
-driver, against a 16.67 ms budget:
+**Version 3** draws each frame as nine horizontal bands pulled by three
+threads (`src/w7_thread.c`); every draw function runs once per band with
+its own clip rows, and `tools/bandcheck.sh` proves the result is identical,
+pixel for pixel, to drawing it on one thread. Auto uses three of the Pi 4's
+four cores, leaving one for RetroArch. Soaked on the Pi 4 with
+`tools/pi_soak.sh`, paced at 60 fps, against a 16.67 ms budget:
+
+| | render mean | max | RetroArch CPU |
+|---|---|---|---|
+| spin loop, 1 thread | 9.1 ms | 30.3 ms | 78% |
+| spin loop, 3 threads | 6.6 ms | 21.0 ms | 137% |
+| HOLD & SPIN, 3 threads | 7.0 ms | 20.4 ms | 141% |
+| EPIC win coin shower, 3 threads | 9.2 ms | 24.5 ms | 180% |
+
+The maxima are single frames - a caption or cached screen being built the
+first time - and steady play stays at 9-13 ms. Unpaced it runs at 104 fps.
+The SoC peaked at 56 C with the clock held at 1,800 MHz: it never
+throttled. On the cabinet itself, with the 3440x1440 display and the CRT
+shader, RetroArch uses about two cores.
+
+The version 2 figures, single-threaded, for comparison:
 
 | | ms/frame | budget |
 |---|---|---|
