@@ -411,7 +411,7 @@ timings on the Pi are the real per-frame cost without RetroArch.
 
 ## 9. Backups
 
-State of the copies as found on 2026-09-23:
+State of the copies after the v3.0.1 deploy on 2026-09-23:
 
 | where | what | status |
 |---|---|---|
@@ -419,18 +419,19 @@ State of the copies as found on 2026-09-23:
 | `~/Wild7s` on the Pi | the tree the live core was built from | current as of the last deploy |
 | `~/Wild7s-v2.2` on the Pi | the v2.2 tree | rollback copy |
 | `~/RetroPie/roms/ports/wild7/wild7-source-v2.2.tar.gz` (stick) | v2.2 source | rollback copy |
-| `~/RetroPie/roms/ports/wild7/wild7-source.tar.gz` (stick) | a source tarball from an earlier version | check its contents and date (`tar -tzvf`) before relying on it |
-| `<cloud-drive>\Wild7s` | mirror of the tree | **last updated 2026-09-06 - version 2 era, not v3** (its `src/` has only `wild7_libretro.c`, `sim.c`, `libretro.h`) |
+| `~/RetroPie/roms/ports/wild7/wild7-source.tar.gz` (stick) | v3.0.1 source (`git archive` of the deployed commit), with `README.md` and `docs/` beside it | current |
+| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.bundle` | the whole git repo, every branch and all history (`git bundle --all`) | **current**; restore with `git clone <bundle> Wild7s` |
+| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.tar.gz` | source tarball of the deployed commit | current |
+| `<cloud-drive>\Wild7s` | mirror of the tree | refreshed to v3.0.1 on 2026-09-23 (files added and overwritten; nothing removed) |
 | `<cloud-drive>\Wild7s-v2.3-2026-09-06.tar.gz` | dated tarball | 2026-09-06, version 2 era |
 | `<usb-disk>\Wild7s-v2.0-<date>.tar.gz` | tarball on the external USB disk | v2.0; the disk was not attached when this was written, so not re-checked |
 
-**Version 3 currently has no off-machine backup.** It exists in the
-Desktop repo and on the Pi only. A complete, restorable copy of the repo with
-all its history is one command:
+To refresh the off-machine copy after a change - a complete, restorable
+copy of the repo with all its history is one command:
 
 ```powershell
-git -C C:\path\to\Wild7s bundle create "<cloud-drive>\Wild7s-v3-2026-09-23.bundle" --all
-# restore anywhere with:  git clone Wild7s-v3-2026-09-23.bundle Wild7s
+git -C C:\path\to\Wild7s bundle create "<cloud-drive>\Wild7s-<version>-<date>.bundle" --all
+# restore anywhere with:  git clone Wild7s-<version>-<date>.bundle Wild7s
 ```
 
 A plain source tarball for the stick, next to the ROM, can be made the same
