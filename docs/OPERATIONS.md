@@ -354,7 +354,7 @@ threads 3: exit 0, 61.2 s wall = 58.8 fps
   number at the end of each window, which tells which scene a spike belongs
   to.
 
-The v3 reference (README, Performance): spin loop 3 threads render mean
+The v3 reference (docs/DESIGN.md, Performance): spin loop 3 threads render mean
 6.6 ms, max 21.0 ms, RetroArch 137%; 1 thread 9.1 / 30.3 ms, 78%; HOLD &
 SPIN 7.0 / 20.4 ms, 141%; EPIC coin shower 9.2 / 24.5 ms, 180%; 104 fps
 unpaced; SoC peak 56 C at 1,800 MHz, never throttled. On the real display

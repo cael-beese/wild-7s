@@ -88,7 +88,7 @@ Why this shape:
 - **One translation unit** lets `-O3` inline the pixel primitives into every
   caller across modules, lets modules share `static` state without a header
   for every primitive, and keeps the build a single `cc` command. The cost is
-  the build time (about 3.5 minutes on the Pi 4, per README) and that every
+  the build time (about 3.5 minutes on the Pi 4, per docs/DESIGN.md) and that every
   unused function warns under `-Wall`; the module APIs are therefore
   declared `static __attribute__((unused))` (`FX_API`, `AUDAPI`).
 - **Module headers come before `game_t`** because `game_t` embeds each
@@ -1080,7 +1080,7 @@ way pays total   36.79%  (base game, before scatter pays)
 ```
 
 The same run at 8,000,000 spins gives **93.86%** (free spins 26.36%),
-which is the 93.9% in the README; 1,000,000 spins at the top bet
+which is the 93.9% in the README and docs/DESIGN.md; 1,000,000 spins at the top bet
 (`betIdx 12`) gave 94.89%. The spread between these is Monte-Carlo noise
 from the free spins, not a bet effect: use 5M+ spins and compare like with
 like. At about 2 s per million spins in WSL, a 10M run is cheap.
@@ -1106,7 +1106,7 @@ pay table is arithmetic.
 | `GAMBLE_CAPX`, `GAMBLE_ROUNDS` | `w7_extra.c` | no RTP effect. |
 
 After any change: run the sim at 5M+ spins, check the hold/wheel/free/pick
-trigger rates and `./w7sim jp`, update the README's figures, and (for
+trigger rates and `./w7sim jp`, update the figures in README.md, docs/DESIGN.md and docs/GAME_GUIDE.md, and (for
 display changes) `tools/bandcheck.sh`.
 
 ---
