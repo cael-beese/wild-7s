@@ -1603,44 +1603,13 @@ typedef struct {
 static game_t G;
 
 /* ── coin burst ────────────────────────────────────────────────────
- *  Cosmetic only, so deliberately NOT part of game_t / the save state.
+ *  The particles live in w7_fx.c: a pool of spinning coins, sparks,
+ *  stars and confetti, cosmetic and outside the save state.  These
+ *  three keep their old names so existing callers still work.
  * ---------------------------------------------------------------- */
-#define NPART 64
-typedef struct { float x,y,vx,vy,life; uint32_t col; } part_t;
-static part_t parts[NPART];
-
-static void spawn_burst(float x,float y,int n,uint32_t col){
-  for(int i=0;i<NPART && n>0;i++){
-    if(parts[i].life>0) continue;
-    float a=frnd()*TAU, sp=40.0f+frnd()*150.0f;
-    parts[i].x=x; parts[i].y=y;
-    parts[i].vx=cosf(a)*sp; parts[i].vy=sinf(a)*sp-70.0f;
-    parts[i].life=0.5f+frnd()*0.7f;
-    parts[i].col=col;
-    n--;
-  }
-}
-static void update_parts(void){
-  for(int i=0;i<NPART;i++){
-    if(parts[i].life<=0) continue;
-    parts[i].life-=DT;
-    parts[i].vy += 320.0f*DT;
-    parts[i].x  += parts[i].vx*DT;
-    parts[i].y  += parts[i].vy*DT;
-  }
-}
-static void draw_parts(void){
-  for(int i=0;i<NPART;i++){
-    float L=parts[i].life;
-    if(L<=0) continue;
-    int a=(int)(clampf(L*1.6f,0,1)*255);
-    int px=(int)parts[i].x, py=(int)parts[i].y;
-    int r=(L>0.5f)?2:1;
-    for(int j=-r;j<=r;j++) for(int k=-r;k<=r;k++)
-      fb_blend(px+k,py+j,parts[i].col,a);
-    fb_add(px,py,60,50,10);
-  }
-}
+static void spawn_burst(float x,float y,int n,uint32_t col){ fx_burst_col(x,y,n,col,0); }
+static void update_parts(void){}       /* fx_update() moves the particles */
+static void draw_parts(void){}         /* fx_draw() draws them            */
 
 /* ═══ THE BET LADDER ════════════════════════════════════
  *  A 1-2-5 ladder from 10 upward with no top rung of its own: BET MORE
@@ -2267,14 +2236,50 @@ static int force_demand(int r,int*symo,int*rows){
     if(r==2){ *symo=SY_JACKPOT; rows[0]=1; rows[1]=2; rows[2]=3; return 3; }
     return 0;
   case 6:  *symo=SY_ULT; rows[0]=2; return 1;                                  /* ult   */
+  case 7:  /* fsmult: scatters into free spins, then a wild on reel 3 in
+              every free spin, so the multiplier climbs and pops */
+    if(!G.inFree){ if(r<3){ *symo=SY_STAR; rows[0]=2; return 1; } return 0; }
+    if(r==2){ *symo=SY_SEVEN; rows[0]=2; return 1; }
+    return 0;
   }
   return 0;
+}
+
+/*  WILD7_FORCE=big|super|megawin|epic: a big win for the presentation
+ *  work.  A per-reel demand cannot ask for "a win worth 50x", so when the
+ *  first reel settles this searches whole sets of five genuine strip
+ *  stops, scoring each with the real evaluate(), for one inside the
+ *  asked-for band (no jackpot or bonus trigger), and the reels then stop
+ *  on it.  The game state is restored afterwards: only the stops leak. */
+static int fwStop[NREEL];
+static void force_win_search(void){
+  static const int need[4]={10,25,50,100};
+  static uint32_t rs=0x2545F491u;
+  static game_t save;
+  int k=dbg_force-20;
+  if(k<0||k>3) return;
+  long long bet=TOTBET, lo=(long long)need[k]*bet;
+  long long hi=k<3?(long long)need[k+1]*bet:(long long)4e18;
+  save=G;
+  long long best=-1;
+  for(int tr=0;tr<800000;tr++){
+    int st[NREEL];
+    for(int r=0;r<NREEL;r++){ rs^=rs<<13; rs^=rs>>17; rs^=rs<<5; st[r]=(int)(rs%STRIPLEN); }
+    for(int r=0;r<NREEL;r++) for(int row=0;row<NROW;row++) G.grid[r][row]=stripAt(r,st[r]-row);
+    evaluate();
+    if(G.jpWon>=0||G.scatCount>=3||G.bonusCount>=3) continue;
+    long long w=G.winTotal;
+    if(w>best && w<hi){ best=w; memcpy(fwStop,st,sizeof fwStop); }
+    if(w>=lo && w<hi) break;
+  }
+  G=save;
 }
 
 /* ═══ UPDATE ══════════════════════════════════════════════════════ */
 static inline int cellcx(int r);
 static inline int cellcy(int row);
 static void flash_btn(int i);
+static const uint32_t WINCOL[8];         /* defined with the renderer */
 
 static void update(void){
   G.t += DT;
@@ -2304,7 +2309,11 @@ static void update(void){
           G.rstate[r]=2; G.ru[r]=0;
           G.rt0[r]=G.rpos[r];
           float tgt = floorf(G.rpos[r]) + 4.0f + (float)irnd(STRIPLEN);
-          if(dbg_force){
+          if(dbg_force>=20){
+            if(r==0) force_win_search();   /* the first reel to settle */
+            int lo=(int)floorf(G.rpos[r])+4;
+            tgt=(float)(lo+((fwStop[r]-lo)%STRIPLEN+STRIPLEN)%STRIPLEN);
+          } else if(dbg_force){
             int want, rows[5];
             int nd=force_demand(r,&want,rows);
             int lo=(int)floorf(G.rpos[r])+4;
@@ -2380,10 +2389,8 @@ static void update(void){
     if(allstop){
       snapshot_grid(); evaluate();
       if(G.multUp>1.8f){                       /* the meter just notched up */
-        for(int k=0;k<3;k++)
-          spawn_burst(LRX+RAILW-67+(frnd()-0.5f)*90.0f, FEATY+40.0f, 8, 0xFFD24A);
+        fx_multup_begin();                     /* flash, shake, sparks (w7_fx.c) */
         sfx_mult(G.fsMult);
-        G.flash = opt_limiter?0.28f:0.55f;
       }
       G.pend=0;
       if(extra_storm_pending()) extra_storm_begin();   /* -> ST_STORM -> ST_EVAL */
@@ -2396,48 +2403,72 @@ static void update(void){
     break;
 
   case ST_EVAL:
-    if(G.t>0.20f){
+    /* a multiplier pop gets the screen to itself: its sparks reach the
+       meter before the spin's wins come up */
+    if(G.t>0.20f && !(G.inFree && G.multUp>0.55f)){
       if(G.jpWon>=0){
         G.state=ST_JACKPOT; G.t=0; G.jpT=0;
-        G.flash = opt_limiter?0.35f:0.8f;
         sfx_jackpot(G.jpWon);
+        fx_jackpot_begin(G.jpWon);         /* flash, shake, the first burst */
         break;
       }
       G.pend |= pend_from_grid();          /* idempotent: EVAL can re-enter */
       if(G.winTotal>0){
         G.state=ST_SHOWWIN; G.t=0; G.showIdx=0; G.showT=0; G.winShown=0;
-        G.flash = opt_limiter?0.35f:0.7f;
-        if(G.winTotal >= TOTBET*40){ G.banner=2; G.bannerT=3.4f; snd(392,784,0.7f,1,0.2f); }
-        else if(G.winTotal >= TOTBET*10){ G.banner=1; G.bannerT=2.4f; }
+        /*  G.banner is the big-win tier on show (1 BIG .. 4 EPIC, 0 for
+         *  a small win) and G.bannerT the time left on its slam.  BIG
+         *  lands on the first frame; the count climbs to the rest.     */
+        G.banner=0; G.bannerT=0;
+        for(int i=0;i<G.nWin;i++) fx_win_burst(G.winMask[i],WINCOL[i&7],1);
+        if(fx_bw_tier(G.winTotal,TOTBET)>=1){ G.banner=1; G.bannerT=1.0f; fx_bigwin_slam(1); }
+        else G.flash = opt_limiter?0.15f:0.25f;
       }
       else next_feature();
     }
     break;
 
   case ST_SHOWWIN: {
-    int step = 1 + G.winTotal/45;
+    /*  The count is a function of G.t (fx_bw_shown): a quick ease-out
+     *  for a small win, and for a big one a roll that stalls just short
+     *  of each tier line before the title slams up a tier.  The first
+     *  press jumps to the whole amount, the second collects.          */
+    long long bet=TOTBET;
+    int   T   =fx_bw_tier(G.winTotal,bet);
+    float cend=fx_bw_count_end(G.winTotal,bet);
     if(G.winShown < G.winTotal){
-      G.winShown += step;
-      if(G.winShown > G.winTotal) G.winShown = G.winTotal;
-      if(((int)(G.t*60))%3==0) snd(1200+irnd(200),1600,0.04f,0,0.05f);
+      long long v=fx_bw_shown(G.winTotal,bet,G.t);
+      G.winShown=(int)(v>G.winTotal?G.winTotal:v);
+      if(((int)(G.t*60))%3==0){
+        float k=G.winTotal>0?(float)G.winShown/(float)G.winTotal:1.0f;
+        snd(1100.0f+k*900.0f+irnd(160),1500.0f+k*900.0f,0.04f,0,0.05f);
+      }
+    }
+    if(T>=1){
+      int cur=fx_bw_tier(G.winShown,bet);
+      if(cur<1) cur=1;
+      if(cur>G.banner){ G.banner=cur; G.bannerT=1.0f; fx_bigwin_slam(cur); }
+      fx_bigwin_tick(G.banner,G.winShown>=G.winTotal);
     }
     G.showT += DT;
-    if(G.nWin>0 && G.showT>0.85f){
+    if(G.nWin>0 && G.showT>(T>=1?1.3f:0.85f)){
       G.showT=0; G.showIdx=(G.showIdx+1)%G.nWin;
-      uint32_t m=G.winMask[G.showIdx];
-      for(int c=0;c<NCELL;c++) if((m>>c)&1u){
-        spawn_burst((float)cellcx(c/NROW),(float)cellcy(c%NROW),8,0xFFD24A);
-        break;
-      }
+      fx_win_burst(G.winMask[G.showIdx],WINCOL[G.showIdx&7],0);
     }
     /* X on a shown win: gamble it instead of collecting (w7_extra.c) */
     if(G.winShown>=G.winTotal && G.t>0.5f && hit(B_X) && gamble_allowed()){
+      fx_stop(); G.banner=0;
       gamble_begin();
       break;
     }
-    if((G.winShown>=G.winTotal && G.t>1.1f && anyhit()) || G.t>6.5f){
-      award(G.winTotal);
-      next_feature();
+    if(G.winShown < G.winTotal){
+      if(anyhit() && G.t>0.2f){ G.t=cend; G.winShown=G.winTotal; }
+    } else {
+      float hold = T>=1 ? 3.0f : (G.inFree?1.6f:5.4f);
+      if((anyhit() && G.t>cend+0.25f) || G.t>cend+hold){
+        fx_stop(); G.banner=0;
+        award(G.winTotal);
+        next_feature();
+      }
     }
     break; }
 
@@ -2447,14 +2478,15 @@ static void update(void){
 
   case ST_JACKPOT:
     G.jpT += DT;
-    { float run = (G.jpWon==JP_ULT)?6.0f:3.0f;
+    { float run = fx_jackpot_run(G.jpWon);
+      fx_jackpot_tick(G.jpWon,G.t);          /* coin rain, fountains, fireworks */
       if(((int)(G.t*60))%5==0 && G.t<run){
-        spawn_burst(FBW*0.5f + (frnd()-0.5f)*420.0f, 300.0f, 6, 0xFFD24A);
         /* the coin ticks climb while the amount rolls up */
         float k=clampf(G.t/run,0,1);
         snd(1500.0f+k*1300.0f, 2300.0f+k*1300.0f, 0.05f,0,0.035f);
       } }
-    if(G.t>(G.jpWon==JP_ULT?7.0f:4.2f) || (G.t>1.4f && anyhit())){
+    if(G.t>fx_jackpot_run(G.jpWon)+fx_jackpot_hold(G.jpWon) || (G.t>1.4f && anyhit())){
+      fx_stop();
       award(G.jpAmt);
       G.jpWon=-1; G.jpAmt=0; G.jpMask=0;
       G.state=ST_EVAL; G.t=0.21f;         /* fall back into the normal flow */
@@ -3015,50 +3047,13 @@ static void draw_reels(void){
  *  thread a line from each lit cell to the lit cells it feeds on the reel
  *  to its right — never within a reel, never leftwards — so the eye reads
  *  the way the win was made.                                          */
-static void light_cluster(uint32_t m,uint32_t c,float pulse,int heavy){
-  for(int i=0;i<NCELL;i++){
-    if(!((m>>i)&1u)) continue;
-    int rr=i/NROW, row=i%NROW;
-    int cx=cellcx(rr), cy=cellcy(row);
-    cell_wash(cx,cy,c,0.36f*pulse);
-    fb_rframe(GX+rr*CW+4,GY+row*CH+3,CW-8,CH-6,10,heavy?4.0f:3.0f,c,(int)(235*pulse));
-    fb_rframe(GX+rr*CW+8,GY+row*CH+7,CW-16,CH-14,7,1.5f,0xFFFFFF,(int)(150*pulse));
-  }
-  /* the wilds in the win wear their multiplier, so the doubling is
-     visible rather than something to work out from the total */
-  for(int i=0;i<NCELL;i++){
-    if(!((m>>i)&1u)) continue;
-    if(G.grid[i/NROW][i%NROW]!=SY_SEVEN) continue;
-    int bx=cellcx(i/NROW)+CW/2-40, by=cellcy(i%NROW)+CH/2-26;
-    fb_rrect(bx,by,34,20,6,0x1A0C00,(int)(230*pulse));
-    fb_rframe(bx,by,34,20,6,1.5f,0xFFD24A,(int)(255*pulse));
-    text("X2",bx+17,by+6,2,0xFFE9A8,1,0);
-  }
-  for(int i=0;i<NCELL;i++){
-    if(!((m>>i)&1u)) continue;
-    int rr=i/NROW, row=i%NROW;
-    if(rr+1>=NREEL) continue;
-    for(int dw=-1;dw<=1;dw++){
-      int nw=row+dw;
-      if(nw<0||nw>=NROW) continue;
-      int j=(rr+1)*NROW+nw;
-      if(!((m>>j)&1u)) continue;
-      float x0=(float)cellcx(rr), y0=(float)cellcy(row);
-      float x1=(float)cellcx(rr+1), y1=(float)cellcy(nw);
-      fb_line(x0,y0,x1,y1,7,0x101018,190);
-      fb_line(x0,y0,x1,y1,3,c,(int)(170*pulse)+80);
-    }
-  }
+static void __attribute__((unused)) light_cluster(uint32_t m,uint32_t c,float pulse,int heavy){
+  /* w7_fx.c: lit cells, path lines with running light, the symbol pop
+     and the X2 badges; the pop is timed from when the win came up */
+  fx_light_cluster(m,c,pulse,heavy,G.state==ST_SHOWWIN?G.showT:G.t);
 }
 
-static void draw_wins(void){
-  if(G.state!=ST_SHOWWIN || G.nWin<=0) return;
-  int w=G.showIdx;
-  float pulse=0.55f+0.45f*sinf(G.t*9.0f);
-  /* every other winning cluster stays faintly lit behind the featured one */
-  for(int i=0;i<G.nWin;i++) if(i!=w) light_cluster(G.winMask[i],WINCOL[i&7],0.35f,0);
-  light_cluster(G.winMask[w],WINCOL[w&7],pulse,1);
-}
+static void draw_wins(void){ fx_wins_draw(); }   /* w7_fx.c */
 
 /* the rails lower half: feature meters and the last-win panel */
 /*  Only the values move.  The panels themselves are painted into the
@@ -3421,40 +3416,7 @@ static void draw_bonus(void){
 }
 
 /* the jackpot celebration */
-static void draw_jackpot(void){
-  float pl=0.5f+0.5f*sinf(G.t*8.0f);
-  int ult = (G.jpWon==JP_ULT);
-  dim(ult?150:200);
-  /* the winning cells come back to full brightness through the dim, so the
-     player sees exactly what did it */
-  for(int c=0;c<NCELL;c++) if((G.jpMask>>c)&1u){
-    int r=c/NROW,row=c%NROW;
-    int idx=G.grid[r][row];
-    blit(&sym[idx],GX+r*CW+SOX,GY+row*CH+SOY,GY,GY+GH,255,0,0.0f);
-  }
-  light_cluster(G.jpMask, ult?0x9AF0FF:0xFF6A30, 0.7f+0.3f*pl, 1);
-  for(int i=0;i<40;i++){
-    float a=G.t*0.55f + i*(TAU/40.0f);
-    float ca=cosf(a), sa=sinf(a);
-    for(int d=110;d<640;d+=1){
-      int x=(int)(FBW*0.5f+ca*d), y=(int)(312+sa*d*0.55f);
-      if((unsigned)x>=FBW||y<150||y>=474) continue;
-      float f=(1.0f-(d-110)/530.0f);
-      if(ult) fb_add(x,y,(int)(30*pl*f),(int)(48*pl*f),(int)(60*pl*f));
-      else    fb_add(x,y,(int)(52*pl*f),(int)(38*pl*f),(int)(6*pl*f));
-    }
-  }
-  char b[64];
-  fb_rect(0,196,FBW,232,0x000000,220);
-  uint32_t rule = ult ? mixc(0x9AF0FF,0xFFFFFF,pl) : 0xFFD24A;
-  for(int j=0;j<3;j++)
-    for(int i=0;i<FBW;i++){ fb_blend(i,196+j,rule,255); fb_blend(i,427-j,rule,255); }
-  snprintf(b,sizeof b,"%s JACKPOT",JP_NAME[G.jpWon<0?JP_MINOR:G.jpWon]);
-  textb(b,FBW/2,214,ult?8:7,ult?RAINBOWG:GOLDG,ult?6:5,1);
-  seg_num(G.jpAmt, FBW/2+seg_width(12,21,58,1)/2, 322, 12, 21, 58,
-          mixc(ult?0xB0F0FF:0xFFB020,0xFFFFFF,pl*0.7f), 0x4A3406, 1);
-  if(((int)(G.t*2.4f))&1) text("PRESS ANY BUTTON TO COLLECT",FBW/2,442,3,0xFFFFFF,1,1);
-}
+static void draw_jackpot(void){ fx_jackpot_draw(); }   /* w7_fx.c */
 
 /* the ADD CREDITS chooser, over the reel window */
 static void draw_addcr(void){
@@ -3538,44 +3500,12 @@ static void draw_overlays(void){
   if(G.multUp>0 && G.inFree &&
      (G.state==ST_IDLE||G.state==ST_SPIN||G.state==ST_EVAL||G.state==ST_SHOWWIN)){
     /* short, loud, and gone: the meter climbing is the best news in the
-       feature, so it gets the middle of the screen for a second */
-    float u=1.0f-G.multUp/1.9f;                  /* 0 at the notch, 1 at the end */
-    float rise=1.0f-(1.0f-u)*(1.0f-u);
-    int by2=GY+GH/2-58-(int)(rise*70.0f);
-    int a=(int)(255*clampf(G.multUp*1.3f,0,1));
-    int bw2=520, bx2=FBW/2-bw2/2;
-    fb_rrect(bx2,by2,bw2,116,20,0x0A0518,(int)(a*0.88f));
-    fb_rframe(bx2,by2,bw2,116,20,3.0f,0xFFD24A,a);
-    text("MULTIPLIER UP",FBW/2,by2+14,3,0xFFE9A8,1,1);
-    float pop=1.0f+0.35f*(1.0f-u)*(1.0f-u);
-    snprintf(b,sizeof b,"X%d",G.fsMult);
-    textb(b,FBW/2,by2+40,(int)(7*pop),GOLDG,5,1);
-    for(int k=0;k<10;k++){                       /* rays behind the number */
-      float ang=G.t*2.2f+k*(TAU/10.0f);
-      for(int d=48;d<150;d+=2){
-        int x=(int)(FBW*0.5f+cosf(ang)*d), y=(int)(by2+64+sinf(ang)*d*0.42f);
-        float f=(1.0f-(d-48)/102.0f)*(a/255.0f);
-        fb_add(x,y,(int)(50*f),(int)(38*f),(int)(6*f));
-      }
-    }
+       feature, so it gets the middle of the screen - rays, the number
+       slamming in, its sparks flying off to the meter (w7_fx.c) */
+    fx_multup_draw();
   }
-  if(G.bannerT>0 && (G.banner==1||G.banner==2)){
-    const char*t = G.banner==2?"MEGA WIN":"BIG WIN";
-    float sc=1.0f+0.08f*sinf(G.t*10.0f);
-    int px=(int)((G.banner==2?11:9)*sc);
-    int bw2=660, bh2=170, bx2=FBW/2-bw2/2, by2=GY+GH/2-bh2/2;
-    /* a soft halo built from 26 stacked rounded rects cost 40 ms a frame,
-       each one evaluating a distance field over the whole plate.  One
-       ring reads the same against a lit reel window. */
-    fb_rrect(bx2-16,by2-16,bw2+32,bh2+32,36,0x000000,105);
-    fb_rrectg(bx2,by2,bw2,bh2,22,0x2A1030,0x06020A,236);
-    fb_rframe(bx2,by2,bw2,bh2,22,3.0f,0xFFD24A,255);
-    fb_rframe(bx2+6,by2+6,bw2-12,bh2-12,17,1.0f,0x8A6A10,220);
-    textb(t,FBW/2,by2+18,px,G.banner==2?ICEG:GOLDG,4,1);
-    int shown2=(G.state==ST_SHOWWIN)?G.winShown:G.winTotal;
-    seg_num(shown2, FBW/2+seg_width(7,22,54,1)/2, by2+96, 7, 22, 54,
-            0xFFB020, 0x4A3406, 1);
-  }
+  /* BIG / SUPER / MEGA / EPIC WIN, while the count rolls (w7_fx.c) */
+  fx_bigwin_draw();
   if(G.state==ST_JACKPOT)  draw_jackpot();
   if(G.state==ST_PAYTABLE) draw_paytable();
   if(G.state==ST_BONUS)    draw_bonus();
@@ -3754,6 +3684,13 @@ void retro_init(void){
       dbg_force = !strcmp(e,"free")?1:(!strcmp(e,"pick")?2:
                   (!strcmp(e,"win")?3:(!strcmp(e,"mega")?4:
                   (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:0)))));
+    /* big-win presentation tests: genuine stops worth 10x / 25x / 50x /
+       100x the bet or more (force_win_search) */
+    if(e && !strcmp(e,"big"))     dbg_force=20;
+    if(e && !strcmp(e,"super"))   dbg_force=21;
+    if(e && !strcmp(e,"megawin")) dbg_force=22;
+    if(e && !strcmp(e,"epic"))    dbg_force=23;
+    if(e && !strcmp(e,"fsmult"))  dbg_force=7;   /* the multiplier pop */
   }
   if(!assets_ready){
     build_strips();
@@ -3761,6 +3698,7 @@ void retro_init(void){
     build_dome(0);
     build_dome(1);
     build_bg();
+    fx_init();                              /* after the symbol sprites */
     assets_ready=1;
   }
   reset_game();
@@ -3779,6 +3717,7 @@ void retro_deinit(void){
   free(glowspr.px); glowspr.px=NULL;
   free(washspr.px); washspr.px=NULL;
   for(int i=0;i<2;i++){ free(domespr[i].px); domespr[i].px=NULL; }
+  fx_deinit();
   assets_ready=0;
 }
 unsigned retro_api_version(void){ return RETRO_API_VERSION; }
