@@ -111,7 +111,8 @@ are then counted into the meter one by one. About one spin in 250; the mean
 prize is about 13 times the bet.
 
 **WHEEL OF 7'S** — a WHEEL on each of reels 2, 3 and 4 brings on a 600-pixel
-wheel ringed with chasing bulbs. A spins it. Twenty-four wedges pay 5x to
+wheel ringed with chasing bulbs. A, START or B spins it (it spins itself
+after six seconds, three and a half on the SUPER WHEEL). Twenty-four wedges pay 5x to
 250x the bet, the MINOR and MAJOR jackpots, or SUPER, which swaps in the
 SUPER WHEEL (25x to 500x, the MAJOR and the MEGA) for another spin. The
 outcome is drawn from a weighted table the moment it starts spinning, and
@@ -183,9 +184,9 @@ stops** (96^3) and every ULTIMATE chain exactly.
 | | exact odds |
 |---|---|
 | ULTIMATE | 1 in 7,870,393 spins |
-| MEGA     | 1 in 18,432 |
-| MAJOR    | 1 in 5,745 |
-| MINOR    | 1 in 397 |
+| MEGA     | 1 in 13,011 |
+| MAJOR    | 1 in 2,930 |
+| MINOR    | 1 in 401 |
 
 The simulator plays the ladder end to end and reports the return at each
 rung; it comes out identical at all of them.
@@ -200,12 +201,13 @@ rung; it comes out identical at all of them.
 | Y | Add credits — choose 100 to 5,000 |
 | Select | Pay table; Select again for FEATURES, again for MORE FEATURES |
 | B | Slam / cancel |
-| D-pad, A | Move and pick in the pick round; A spins the wheel |
+| D-pad, A | Move and pick in the pick round; A (or START, B) spins the wheel |
 | Any button | During a big-win count, jump to the total; again to collect |
 
 If the bet is more than the bank, Start trims it to the highest rung you can
-afford rather than refusing. Out of credits? Start opens the ADD CREDITS
-chooser: pick 100, 250, 500, 1,000, 2,500 or 5,000 and press A.
+afford rather than refusing. Out of credits? The OUT OF CREDITS screen comes
+up; START, A or Y there opens the ADD CREDITS chooser: pick 100, 250, 500,
+1,000, 2,500 or 5,000 and press A.
 
 ## The spin
 
@@ -480,11 +482,16 @@ the sprites, per-row sprite spans.
 
 ## Options
 
-RetroArch Quick Menu -> Core Options, or edit `wild7.w7`:
+RetroArch Quick Menu -> Core Options. `wild7.w7` can also set `sound=off`,
+`music=off`, `turbo=on`, `limiter=off` and `credits=N` (the starting bank),
+one per line; `;` lines are comments. It can only move a setting away from
+its default, so it never undoes a Core Options choice. (Until 3.0.1 the
+file's own comment line switched turbo on.)
 
 - **Sound** (default on)
 - **Music** (default on) — the background tunes; the effects stay on
-- **Turbo spin** (default off) — halves the gaps between reel stops
+- **Turbo spin** (default off) — faster reels (20 symbols a second instead
+  of 13), a quicker settle, and half the gaps between reel stops
 - **Flash limiter** (default on) — damps the win flashes, the shake and the
   storm's lightning
 - **Render threads** (default auto = 3 on a Pi 4) — how many cores draw the
@@ -510,6 +517,7 @@ WILD7_AUTOPILOT=6   climb the ladder WILD7_FORCE=hold    6+ LUCKY COINS -> HOLD 
                                      WILD7_FORCE=fsmult  free spins with a wild every spin
 WILD7_HOLD=grand    with FORCE=hold: coins land freely, to reach the GRAND
 WILD7_THREADS=1..4  override the thread option     WILD7_PROFILE=1  render/update ms to stderr
+WILD7_BANDS=N       bands per frame (tuning)       FORCE=free retriggers every free spin: use fsmult for one that ends
 ```
 
 On the Windows box, `make shot` builds `w7shot`, a headless host that runs
@@ -539,5 +547,5 @@ it lost the race for the screen, and restarts tty1's autologin afterwards so
 EmulationStation comes back when the player quits:
 
 ```
-setsid nohup ~/w7launch.sh >/dev/null 2>&1 < /dev/null &
+setsid -f nohup ~/w7launch.sh >/dev/null 2>&1 < /dev/null
 ```

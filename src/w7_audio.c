@@ -846,7 +846,8 @@ static void music_auto(void){
   case ST_FSINTRO:  want=G.inFree?TR_FREE:-1; break;
   case ST_BONUS:    want=TR_PICK; break;
   case ST_HOLD: {
-    int c=0; for(int i=0;i<NCELL;i++) if(G.hold.val[i]>0) c++;
+    /* the coins locked on the board, not the ones that started it */
+    int c=G.hold.locked;
     want=TR_HOLD; I=clampf((float)(c-5)/14.0f,0.0f,1.0f); } break;
   case ST_WHEEL:    want=TR_WHEEL; I=clampf(G.t/5.0f,0.0f,1.0f); break;
   case ST_GAMBLE:   want=TR_HOLD; I=0.35f; break;

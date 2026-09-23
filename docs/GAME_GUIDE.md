@@ -73,8 +73,8 @@ Contents
 | Any button | Leaves the attract loop | During a big-win count: jump to the total, then again to collect |
 
 If your bet is more than your credits, START trims the bet to the
-highest one you can afford instead of refusing. At zero credits START
-opens ADD CREDITS.
+highest one you can afford instead of refusing. At zero credits the OUT
+OF CREDITS screen comes up; START, A or Y there opens ADD CREDITS.
 
 ## 3. Credits and the bet
 
@@ -320,8 +320,9 @@ holding; a wrong call loses it. See section 13.
 ## 11. WHEEL OF 7'S
 
 - **One WHEEL on each of reels 2, 3 and 4.**
-- A giant wheel with chasing bulbs comes up. **Press A to spin** (it spins
-  itself after about 6 seconds).
+- A giant wheel with chasing bulbs comes up. **Press A** (or START, or B)
+  **to spin** - it spins itself after about 6 seconds (3.5 on the SUPER
+  WHEEL).
 - 24 wedges: **5x to 250x the bet**, the **MINOR** and **MAJOR**
   jackpots, and **SUPER**.
 - **SUPER** swaps in the black-and-gold **SUPER WHEEL** - 25x to 500x, the

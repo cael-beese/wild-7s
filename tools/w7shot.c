@@ -17,6 +17,8 @@
  *              WILD7_AUTOPILOT is set (the core's own pilot wins).
  *  -p NAME     file name prefix (default f)
  *  -r SEED     rng seed
+ *  -g FILE     load FILE as the content (a .w7 settings file) and print
+ *              the settings it produced
  *  -w FILE     write everything handed to audio_batch_cb as a 16-bit
  *              stereo WAV, and print its peak / RMS / DC
  *  -H N        hash every Nth frame (1 = all): prints "h FRAME STATE HASH"
@@ -150,7 +152,7 @@ static double now_ms(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&t
 
 int main(int argc,char**argv){
   long N=300, hashEvery=0; int quiet=0; const char*outdir="."; const char*saves="299"; const char*script=NULL; const char*pfx="f";
-  const char*wavpath=NULL;
+  const char*wavpath=NULL, *gamepath=NULL;
   for(int i=1;i<argc;i++){
     if(!strcmp(argv[i],"-n")&&i+1<argc) N=atol(argv[++i]);
     else if(!strcmp(argv[i],"-s")&&i+1<argc) saves=argv[++i];
@@ -161,6 +163,7 @@ int main(int argc,char**argv){
     else if(!strcmp(argv[i],"-w")&&i+1<argc) wavpath=argv[++i];
     else if(!strcmp(argv[i],"-H")&&i+1<argc) hashEvery=atol(argv[++i]);
     else if(!strcmp(argv[i],"-q")) quiet=1;
+    else if(!strcmp(argv[i],"-g")&&i+1<argc) gamepath=argv[++i];
   }
   int every=0; if(!strncmp(saves,"every:",6)) every=atoi(saves+6);
   static long savef[256]; int ns=0;
@@ -180,7 +183,13 @@ int main(int argc,char**argv){
   retro_set_input_state(inst);
   double t0=now_ms();
   retro_init();
-  retro_load_game(NULL);
+  { static char gbuf[4096]; struct retro_game_info gi; memset(&gi,0,sizeof gi);
+    size_t gn=0; FILE*gf=gamepath?fopen(gamepath,"rb"):NULL;
+    if(gf){ gn=fread(gbuf,1,sizeof gbuf,gf); fclose(gf); gi.path=gamepath; gi.data=gbuf; gi.size=gn; }
+    else if(gamepath) perror(gamepath);
+    retro_load_game(gf?&gi:NULL);
+    if(gamepath) printf("content %s: sound %d music %d turbo %d limiter %d credits %lld\n",
+                        gamepath,opt_sound,opt_music,opt_turbo,opt_limiter,G.credits); }
   double tinit=now_ms()-t0;
 
   double sum=0,mx=0; long mxf=0;

@@ -39,9 +39,10 @@
  *
  *  Measured (bet 10): a storm spin pays 4.1x the bet on average against
  *  0.35x for the same stops without it (median 1.8x, 1 in 6 over 5x,
- *  1 in 40 over 20x), and 92% of storms pay at least the bet.  At one
- *  base spin in eighty that is about 4.6% of RTP (./w7sim base game
- *  with the storm against -DSTORM_ODDS=0).  Mean payout by bolt count:
+ *  1 in 40 over 20x), and 92% of storms pay at least the bet.  It was
+ *  tuned at one base spin in eighty (about 4.6% of RTP, ./w7sim base
+ *  game with the storm against -DSTORM_ODDS=0); it ships at one in a
+ *  hundred, about 3.4%, as part of bringing the game to 93.9%.  Mean payout by bolt count:
  *  3 bolts 1.4x, 4 2.2x, 5 3.7x, 6 6.7x, 7 12x, 8 23x.
  *
  *  Eligible cells: anything but a feature symbol (scatter, crown,

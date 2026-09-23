@@ -2433,8 +2433,9 @@ static void build_sprites(void){
  *  steps within a reel and never back to the left.  Three, four or five
  *  reels pay, and where a reel offers two connecting symbols each path is
  *  its own way, so the pay multiplies by the number of paths.
- *  Values are per 5 credits of total bet, so a win is PAY * ways * bet / 5.
- *  Every bet on the ladder is a multiple of 5, so that is always exact.
+ *  Values are per 10 credits of total bet, so a win is PAY * ways * bet / 10
+ *  (ways weighted by the wilds).  Every bet on the ladder is a multiple of
+ *  10, so that is always exact.
  *  Tuned against the Monte-Carlo in src/sim.c, which runs this very
  *  evaluator over millions of spins.
  * ================================================================= */
@@ -2486,12 +2487,11 @@ static uint8_t strip[NREEL][STRIPLEN];
    place; the shipped values are the ones written here.                */
 static uint8_t CNT[3][NSYM] = {
 /*  COIN (hold & spin) lands on every reel as singles; WHEEL lands on
- *  reels 2, 3 and 4 only, one showing per reel at most.  WHEEL is still
- *  PROVISIONAL.  COIN is 8 / 7 / 6 (outer / 2,4 / middle): six coins on
+ *  reels 2, 3 and 4 only, one showing per reel at most.  COIN is 8 / 7 / 6 (outer / 2,4 / middle): six coins on
  *  25 cells need a reel showing two, and singles only share a window
  *  where the shuffle happens to put two close, so the trigger rate is a
- *  property of the LAYOUT as much as the count - 1 in ~199 base spins
- *  with these strips.  Any change to this table reshuffles them: re-run
+ *  property of the LAYOUT as much as the count - 1 in ~246 spins with
+ *  the shipped strips (HOLD & SPIN), 1 in ~387 for the WHEEL.  Any change to this table reshuffles them: re-run
  *  w7sim and check the hold & spin line.                              */
 /*        7   D   B  BAR  GR  OR  PL  CH  LE  ST  CR  JP  UL  CO  WH  */
   {       2,  8,  9, 10, 11, 11, 12, 10,  8,  2,  3,  0,  2,  8,  0 },  /* reels 1,5 */
@@ -2921,7 +2921,10 @@ static void evaluate(void){
     if((symm[SY_WHEEL]>>c)&1u) G.wheelCount++;
   }
   if(G.scatCount>=3) G.winTotal += SCATPAY[G.scatCount>5?5:G.scatCount]*TOTBET;
-  if(G.inFree && G.fsMult>1) G.winTotal *= G.fsMult;
+  if(G.inFree && G.fsMult>1){             /* in 64 bits: x5 on a top-bet win can pass 2^31 */
+    long long t=(long long)G.winTotal*G.fsMult;
+    G.winTotal=(int)(t>2000000000LL?2000000000LL:t);
+  }
 
   /* ---- progressives ---- */
   G.jpWon=-1; G.jpMask=0;
@@ -2968,6 +2971,9 @@ static void start_spin(void){
     G.rdelay[r]=d;
     d += gap0 + frnd()*gapr;
     G.reelBlur[r]=0;
+    G.rt1[r]=0;          /* rt1 doubles as "held for anticipation" and the stop target:
+                            left at the last target, the hold only ever fired on the
+                            first spin after the attract loop */
   }
   sfx_spin_start();
 }
@@ -3061,7 +3067,7 @@ static float easeOutBack(float x){
 static void award(long long amt){
   long long c=(long long)G.credits+amt;
   if(c>JP_CLAMP) c=JP_CLAMP;                 /* what the meter can hold */
-  G.credits=(int)c;
+  G.credits=c;                               /* was (int)c: a bank past 2^31 went negative */
   G.lastWin=(int)(amt>2000000000LL?2000000000LL:amt);
   if(G.inFree){
     long long f=(long long)G.fsWon+amt;
@@ -6376,7 +6382,7 @@ unsigned retro_api_version(void){ return RETRO_API_VERSION; }
 void retro_get_system_info(struct retro_system_info*info){
   memset(info,0,sizeof(*info));
   info->library_name     = "Wild 7's";
-  info->library_version  = "2.0";
+  info->library_version  = "3.0.1";
   info->valid_extensions = "w7|wild7";
   info->need_fullpath    = false;
   info->block_extract    = true;
@@ -6458,12 +6464,28 @@ bool retro_load_game(const struct retro_game_info*info){
     char buf[513]; size_t m = info->size<512?info->size:512;
     memcpy(buf,info->data,m); buf[m]=0;
     for(char*p=buf;*p;p++) if(*p>='A'&&*p<='Z') *p+=32;
-    if(strstr(buf,"sound=off"))   opt_sound=0;
-    if(strstr(buf,"music=off"))   opt_music=0;
-    if(strstr(buf,"turbo=on"))    opt_turbo=1;
-    if(strstr(buf,"limiter=off")) opt_limiter=0;
-    const char*c=strstr(buf,"credits=");
-    if(c){ long long v=atoll(c+8); if(v>0 && v<=1000000000LL) G.credits=v; }
+    /*  One "key=value" per line; ';' and '#' lines are comments.  This
+     *  used to search the whole text for "turbo=on", which the file's
+     *  own comment "; turbo=on|off" contains - so every cabinet ran in
+     *  turbo - and "credits=" matched the comment "; credits=N" first. */
+    char*save=NULL;
+    for(char*ln=strtok_r(buf,"\r\n",&save); ln; ln=strtok_r(NULL,"\r\n",&save)){
+      while(*ln==' '||*ln=='\t') ln++;
+      if(*ln==';'||*ln=='#'||!*ln) continue;
+      char*eq=strchr(ln,'='); if(!eq) continue;
+      *eq=0; char*k=ln, *v=eq+1;
+      for(char*e=eq-1; e>=k && (*e==' '||*e=='\t'); e--) *e=0;
+      while(*v==' '||*v=='\t') v++;
+      for(char*e=v+strlen(v)-1; e>=v && (*e==' '||*e=='\t'); e--) *e=0;
+      /* the file can only move a setting away from its default, so it
+         never undoes what the player chose in RetroArch's core options */
+      int on = !strcmp(v,"on"), off = !strcmp(v,"off");
+      if(!strcmp(k,"sound")   && off) opt_sound  = 0;
+      if(!strcmp(k,"music")   && off) opt_music  = 0;
+      if(!strcmp(k,"turbo")   && on)  opt_turbo  = 1;
+      if(!strcmp(k,"limiter") && off) opt_limiter= 0;
+      if(!strcmp(k,"credits")){ long long n=atoll(v); if(n>0 && n<=1000000000LL) G.credits=n; }
+    }
   }
   return true;
 }
@@ -6478,7 +6500,7 @@ void retro_reset(void){ reset_game(); }
 
 size_t retro_serialize_size(void){ return sizeof(G); }
 bool retro_serialize(void*d,size_t s){ if(s<sizeof(G)) return false; memcpy(d,&G,sizeof(G)); return true; }
-bool retro_unserialize(const void*d,size_t s){ if(s<sizeof(G)) return false; memcpy(&G,d,sizeof(G)); return true; }
+bool retro_unserialize(const void*d,size_t s){ if(s!=sizeof(G)) return false;   /* another version's state: refuse, not garbage */ memcpy(&G,d,sizeof(G)); return true; }
 
 void retro_cheat_reset(void){}
 void retro_cheat_set(unsigned i,bool e,const char*c){ (void)i;(void)e;(void)c; }
