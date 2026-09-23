@@ -65,6 +65,7 @@ static int opt_turbo    = 0;   /* faster reel spins                    */
  *                    =3  a single spin, then no further input
  *    WILD7_FORCE=free|pick             land a bonus trigger
  *    WILD7_FORCE=mega|minor           force the jackpot roll to hit
+ *    WILD7_FORCE=storm                arm a 7 STRIKE on every base spin
  * ──────────────────────────────────────────── */
 static int dbg_pilot = 0, dbg_force = 0;
 static long dbg_frame = 0;
@@ -3753,7 +3754,8 @@ void retro_init(void){
     if((e=getenv("WILD7_FORCE")))
       dbg_force = !strcmp(e,"free")?1:(!strcmp(e,"pick")?2:
                   (!strcmp(e,"win")?3:(!strcmp(e,"mega")?4:
-                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:0)))));
+                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:
+                  (!strcmp(e,"storm")?9:0))))));
   }
   if(!assets_ready){
     build_strips();
@@ -3761,6 +3763,7 @@ void retro_init(void){
     build_dome(0);
     build_dome(1);
     build_bg();
+    extra_init();               /* 7 STRIKE clouds, gamble cards and table */
     assets_ready=1;
   }
   reset_game();
