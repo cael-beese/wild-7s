@@ -37,6 +37,11 @@ static uint32_t fb[FBW*FBH];       /* what we hand to the frontend      */
 static uint32_t bg[FBW*FBH];       /* static cabinet art, memcpy'd in   */
 static int16_t  abuf[SPF*2];
 
+/*  The rows the current render thread may write, [clip_y0, clip_y1).
+ *  Single-threaded this is the whole frame; the band renderer narrows it
+ *  per thread.  Any loop that writes fb[] directly must honour it.     */
+static int clip_y0 __attribute__((unused)) = 0, clip_y1 __attribute__((unused)) = FBH;
+
 static retro_video_refresh_t      video_cb;
 static retro_audio_sample_batch_t audio_batch_cb;
 static retro_input_poll_t         input_poll_cb;
@@ -850,7 +855,8 @@ static void cv_text(const char*s,float cx,float cy,float px,uint32_t col,int alp
 
 
 enum { SY_SEVEN=0, SY_DIAMOND, SY_BELL, SY_BAR, SY_GRAPES, SY_ORANGE, SY_PLUM,
-       SY_CHERRY, SY_LEMON, SY_STAR, SY_CROWN, SY_JACKPOT, SY_ULT, NSYM };
+       SY_CHERRY, SY_LEMON, SY_STAR, SY_CROWN, SY_JACKPOT, SY_ULT,
+       SY_COIN, SY_WHEEL, NSYM };
 #define NPAYSYM 9                   /* SY_SEVEN .. SY_LEMON pay as clusters */
 
 static spr_t sym[NSYM];        /* crisp                                 */
@@ -861,7 +867,7 @@ static spr_t domespr[2];       /* the SPIN dome, idle and pressed       */
 
 static const char*SYMNAME[NSYM] = {
   "WILD 7","DIAMOND","BELL","BAR","GRAPES","ORANGE","PLUM","CHERRY","LEMON",
-  "SCATTER","CROWN","JACKPOT","ULTIMATE"
+  "SCATTER","CROWN","JACKPOT","ULTIMATE","LUCKY COIN","WHEEL"
 };
 
 /* ── the medallion ─────────────────────────────────────────────────
@@ -1297,10 +1303,13 @@ static void bake_shadow(spr_t*s,int ox,int oy,int rad,int alpha){
 
 
 /* build the crisp sprites, their motion-blurred twins, and the glow */
+static void art_coin(void);     /* w7_hold.c  */
+static void art_wheel(void);    /* w7_wheel.c */
 static void build_sprites(void){
   void(*art[NSYM])(void) = { art_seven,art_diamond,art_bell,art_bar,art_grapes,
                              art_orange,art_plum,art_cherry,art_lemon,
-                             art_star,art_crown,art_jackpot,art_ult };
+                             art_star,art_crown,art_jackpot,art_ult,
+                             art_coin,art_wheel };
   for(int i=0;i<NSYM;i++){
     cv_clear(); art[i](); cv_resolve(&sym[i]);
     add_contour(&sym[i], SYMW/30, 0x0A0510, 255);   /* hard dark edge */
@@ -1387,6 +1396,8 @@ static const int PAY[NSYM][6] = {
 /* CROWN   */    { 0, 0, 0,   0,   0,   0 },  /* bonus trigger       */
 /* JACKPOT */    { 0, 0, 0,   0,   0,   0 },  /* progressive trigger */
 /* ULT     */    { 0, 0, 0,   0,   0,   0 },  /* progressive trigger */
+/* COIN    */    { 0, 0, 0,   0,   0,   0 },  /* hold & spin trigger */
+/* WHEEL   */    { 0, 0, 0,   0,   0,   0 },  /* wheel bonus trigger */
 };
 
 static const int SCATPAY[6] = {0,0,0,2,10,50};   /* x total bet        */
@@ -1414,15 +1425,18 @@ static uint8_t strip[NREEL][STRIPLEN];
 /* Editable rather than const so the simulator can try alternatives in
    place; the shipped values are the ones written here.                */
 static uint8_t CNT[3][NSYM] = {
-/*        7   D   B  BAR  GR  OR  PL  CH  LE  ST  CR  JP  UL      */
-  {       2,  8,  9, 10, 11, 12, 13, 13, 11,  2,  3,  0,  2 },  /* reels 1,5 */
-  {       2,  8,  9, 10, 11, 12, 13, 13, 13,  1,  0,  3,  1 },  /* reels 2,4 */
-  {       2,  8,  9, 10, 11, 12, 13, 12, 10,  2,  3,  3,  1 },  /* reel 3    */
+/*  COIN (hold & spin) lands on every reel as singles; WHEEL lands on
+ *  reels 2, 3 and 4 only, one showing per reel at most.  These counts are
+ *  PROVISIONAL - taken out of the low fruit - until the maths pass.     */
+/*        7   D   B  BAR  GR  OR  PL  CH  LE  ST  CR  JP  UL  CO  WH  */
+  {       2,  8,  9, 10, 11, 11, 12, 11,  9,  2,  3,  0,  2,  6,  0 },  /* reels 1,5 */
+  {       2,  8,  9, 10, 11, 11, 11, 11, 10,  1,  0,  3,  1,  6,  2 },  /* reels 2,4 */
+  {       2,  8,  9, 10, 10, 11, 11, 10,  8,  2,  3,  3,  1,  6,  2 },  /* reel 3    */
 };
 static uint8_t STK[3][NSYM] = {
-  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  1,  1 },
-  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  2,  1 },
-  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  3,  1 },
+  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  1,  1,  1,  1 },
+  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  2,  1,  1,  1 },
+  {       1,  2,  2,  2,  2,  2,  2,  1,  1,  1,  1,  3,  1,  1,  1 },
 };
 
 static void build_strips(void){
@@ -1453,10 +1467,10 @@ static void build_strips(void){
        often as the pay table implied.  Even spacing means a window shows
        at most one, so the trigger odds are a property of the count.    */
     {
-      static const uint8_t SPC[3]={SY_STAR,SY_CROWN,SY_ULT};
+      static const uint8_t SPC[4]={SY_STAR,SY_CROWN,SY_ULT,SY_WHEEL};
       uint8_t placed[STRIPLEN]; memset(placed,0,sizeof placed);
-      #define ISSPC(v) ((v)==SY_STAR||(v)==SY_CROWN||(v)==SY_ULT)
-      for(int q=0;q<3;q++){
+      #define ISSPC(v) ((v)==SY_STAR||(v)==SY_CROWN||(v)==SY_ULT||(v)==SY_WHEEL)
+      for(int q=0;q<4;q++){
         int sy=SPC[q], n=0;
         for(int i=0;i<nr;i++) if(rsym[i]==sy) n++;
         for(int k=0;k<n;k++){
@@ -1504,11 +1518,32 @@ static void build_strips(void){
  * ================================================================= */
 enum { ST_ATTRACT, ST_IDLE, ST_SPIN, ST_EVAL, ST_SHOWWIN,
        ST_FSINTRO, ST_BONUS, ST_BONUSEND, ST_PAYTABLE, ST_BROKE,
-       ST_JACKPOT, ST_ADDCR };
+       ST_JACKPOT, ST_ADDCR,
+       ST_HOLD,        /* hold & spin bonus        - w7_hold.c  */
+       ST_WHEEL,       /* wheel bonus              - w7_wheel.c */
+       ST_GAMBLE,      /* double-or-nothing        - w7_extra.c */
+       ST_STORM,       /* 7 STRIKE wild storm plays out - w7_extra.c */
+       ST_NSTATES };
 
 #define MAXWINS 12
 #define NPICK 9
 #define NJP 4
+
+/*  Features a spin has triggered but that have not run yet.  They run
+ *  one after another once the spin's own wins have been shown and paid:
+ *  see next_feature().  Order: HOLD, WHEEL, PICK, FREE SPINS.         */
+#define PEND_HOLD  1
+#define PEND_WHEEL 2
+#define PEND_PICK  4
+#define PEND_FS    8
+
+/*  Feature modules (unity build).  Each header holds that module's
+ *  saved state struct and its function prototypes; the matching .c is
+ *  included further down, just before render().                      */
+#include "w7_fx.h"
+#include "w7_hold.h"
+#include "w7_wheel.h"
+#include "w7_extra.h"
 
 typedef struct {
   int   state;
@@ -1557,6 +1592,12 @@ typedef struct {
 
   int   prevBtn, btn;
   uint32_t seed;
+
+  int   pend;                 /* PEND_* features still to run          */
+  int   coinCount, wheelCount;/* trigger counts from evaluate()        */
+  hold_state_t  hold;         /* each module's saved state             */
+  wheel_state_t wheel;
+  extra_state_t extra;
 } game_t;
 
 static game_t G;
@@ -1837,6 +1878,9 @@ static void snapshot_grid(void){
     for(int row=0;row<NROW;row++) G.grid[r][row]=stripAt(r,base-row);
     G.expand[r]=0;
   }
+  /* 7 STRIKE: when a spin was armed at start_spin, the storm drops its
+     wilds here, so the simulator sees exactly what the player sees.   */
+  extra_on_snapshot();
   /* Expanding wilds: during free spins a single wild takes its whole
      reel, and every reel that expands notches the multiplier meter up
      one.  The meter never falls back during the feature, so a run of
@@ -1861,6 +1905,8 @@ static void snapshot_grid(void){
       G.multUp=1.9f;
     }
   }
+  /* every LUCKY COIN on the grid gets its value as it lands */
+  hold_on_snapshot();
 }
 static inline int is_wild(int s){ return s==SY_SEVEN; }
 static inline int payable(int s){ return s<NPAYSYM; }
@@ -1972,10 +2018,12 @@ static void evaluate(void){
   ways=score_ways(wildm,0,&len,&wt,&m);
   if(ways>0 && !(m&won)) add_win(SY_SEVEN,len,ways,wt,m);
 
-  G.scatCount=0; G.bonusCount=0;
+  G.scatCount=0; G.bonusCount=0; G.coinCount=0; G.wheelCount=0;
   for(int c=0;c<NCELL;c++){
     if((symm[SY_STAR]>>c)&1u)  G.scatCount++;
     if((symm[SY_CROWN]>>c)&1u) G.bonusCount++;
+    if((symm[SY_COIN]>>c)&1u)  G.coinCount++;
+    if((symm[SY_WHEEL]>>c)&1u) G.wheelCount++;
   }
   if(G.scatCount>=3) G.winTotal += SCATPAY[G.scatCount>5?5:G.scatCount]*TOTBET;
   if(G.inFree && G.fsMult>1) G.winTotal *= G.fsMult;
@@ -2010,6 +2058,7 @@ static void start_spin(void){
     G.credits -= TOTBET;
     jp_contribute(TOTBET);
   }
+  extra_on_spin_start();          /* may arm a 7 STRIKE for this spin */
   G.state=ST_SPIN; G.t=0; G.spinT=0;
   G.winTotal=0; G.nWin=0; G.winShown=0; G.lastWin=0; G.banner=0;
   /*  The reels run at half the old speed and stop one at a time with a
@@ -2142,6 +2191,33 @@ static int partial_special(void){
   return st>cr?st:cr;
 }
 
+/* ── the feature queue ─────────────────────────────────────────────
+ *  A spin's own wins are shown and paid FIRST, then every feature it
+ *  triggered runs in turn.  The old flow jumped straight into the pick
+ *  round or the free-spins intro and never paid the triggering spin's
+ *  line wins or its scatter pay, although the simulator counted them.
+ * ---------------------------------------------------------------- */
+static int pend_from_grid(void){
+  int p=0;
+  if(hold_triggered())  p|=PEND_HOLD;
+  if(wheel_triggered()) p|=PEND_WHEEL;
+  if(G.bonusCount>=3)   p|=PEND_PICK;
+  if(G.scatCount>=3)    p|=PEND_FS;
+  return p;
+}
+static void after_result(void);
+static void next_feature(void){
+  if(G.pend&PEND_HOLD) { G.pend&=~PEND_HOLD;  hold_begin();  return; }
+  if(G.pend&PEND_WHEEL){ G.pend&=~PEND_WHEEL; wheel_begin(); return; }
+  if(G.pend&PEND_PICK) { G.pend&=~PEND_PICK;  begin_bonus(); return; }
+  if(G.pend&PEND_FS)   { G.pend&=~PEND_FS;
+    G.state=ST_FSINTRO; G.t=0; snd(523,1046,0.5f,1,0.2f); return; }
+  after_result();
+}
+/*  A module calls this when its feature is over and its prize has been
+ *  paid with award(); the queue carries on from there.                */
+static void feature_done(void){ next_feature(); }
+
 static void end_free_spins(void){
   G.inFree=0; G.freeSpins=0;
   G.banner=3; G.bannerT=0;
@@ -2208,6 +2284,7 @@ static void update(void){
   if(G.bannerT>0) G.bannerT -= DT;
   if(G.multUp>0) G.multUp -= DT;
   update_parts();
+  fx_update();
 
   /* ---- reels ---- */
   float spinv = opt_turbo?20.0f:13.0f;      /* half the old speed */
@@ -2308,8 +2385,14 @@ static void update(void){
         sfx_mult(G.fsMult);
         G.flash = opt_limiter?0.28f:0.55f;
       }
-      G.state=ST_EVAL; G.t=0;
+      G.pend=0;
+      if(extra_storm_pending()) extra_storm_begin();   /* -> ST_STORM -> ST_EVAL */
+      else { G.state=ST_EVAL; G.t=0; }
     }
+    break;
+
+  case ST_STORM:
+    extra_storm_update();
     break;
 
   case ST_EVAL:
@@ -2320,15 +2403,14 @@ static void update(void){
         sfx_jackpot(G.jpWon);
         break;
       }
-      if(G.bonusCount>=3){ begin_bonus(); }
-      else if(G.scatCount>=3){ G.state=ST_FSINTRO; G.t=0; snd(523,1046,0.5f,1,0.2f); }
-      else if(G.winTotal>0){
+      G.pend |= pend_from_grid();          /* idempotent: EVAL can re-enter */
+      if(G.winTotal>0){
         G.state=ST_SHOWWIN; G.t=0; G.showIdx=0; G.showT=0; G.winShown=0;
         G.flash = opt_limiter?0.35f:0.7f;
         if(G.winTotal >= TOTBET*40){ G.banner=2; G.bannerT=3.4f; snd(392,784,0.7f,1,0.2f); }
         else if(G.winTotal >= TOTBET*10){ G.banner=1; G.bannerT=2.4f; }
       }
-      else after_result();
+      else next_feature();
     }
     break;
 
@@ -2348,11 +2430,20 @@ static void update(void){
         break;
       }
     }
+    /* X on a shown win: gamble it instead of collecting (w7_extra.c) */
+    if(G.winShown>=G.winTotal && G.t>0.5f && hit(B_X) && gamble_allowed()){
+      gamble_begin();
+      break;
+    }
     if((G.winShown>=G.winTotal && G.t>1.1f && anyhit()) || G.t>6.5f){
       award(G.winTotal);
-      after_result();
+      next_feature();
     }
     break; }
+
+  case ST_HOLD:   hold_update();   break;
+  case ST_WHEEL:  wheel_update();  break;
+  case ST_GAMBLE: gamble_update(); break;
 
   case ST_JACKPOT:
     G.jpT += DT;
@@ -2372,9 +2463,16 @@ static void update(void){
 
   case ST_FSINTRO:
     if(G.t>2.6f || (G.t>0.6f && anyhit())){
-      G.freeSpins += G.inFree ? FS_RETRIG : FS_AWARD;
-      if(!G.inFree){ G.inFree=1; G.fsMult=1; G.fsWon=0; }
-      G.state=ST_IDLE; G.t=0;
+      if(G.inFree){
+        /* a retrigger: the spin that did it still counts as one of the
+           free spins, which the old flow forgot (and the sim did not) */
+        G.freeSpins += FS_RETRIG;
+        after_result();
+      } else {
+        G.freeSpins += FS_AWARD;
+        G.inFree=1; G.fsMult=1; G.fsWon=0;
+        G.state=ST_IDLE; G.t=0;
+      }
     }
     break;
 
@@ -2410,7 +2508,7 @@ static void update(void){
     if(G.t>2.4f || (G.t>0.7f && anyhit())){
       if(G.pickTotal>0){ award(G.pickTotal*(G.pickMult>0?G.pickMult:1)); G.pickTotal=0; }
       if(G.banner==3){ G.banner=0; G.state=(G.credits<bet_at(0))?ST_BROKE:ST_IDLE; G.t=0; }
-      else { G.banner=0; after_result(); }
+      else { G.banner=0; feature_done(); }
     }
     break;
 
@@ -3603,19 +3701,37 @@ static void draw_marquee(void){
   }
 }
 
+/* ═══ FEATURE MODULES (unity build) ═══════════════════════════════
+ *  Included here so they can use every primitive above; their
+ *  prototypes were declared by the headers near game_t.              */
+#include "w7_fx.c"
+#include "w7_hold.c"
+#include "w7_wheel.c"
+#include "w7_extra.c"
+
 static void render(void){
   memcpy(fb,bg,sizeof fb);
   draw_marquee();
-  draw_reels();
+  if(G.state==ST_HOLD) hold_draw();       /* the bonus owns the reel window */
+  else {
+    draw_reels();
+    hold_draw_cells();                    /* coin values over landed coins  */
+    extra_draw_reels();                   /* 7 STRIKE over the reels        */
+  }
   draw_features();
   draw_wins();
   draw_parts();
+  fx_draw();                              /* world-layer effects            */
   draw_meters();
   draw_overlays();
+  if(G.state==ST_WHEEL)  wheel_draw();    /* full-screen feature scenes     */
+  if(G.state==ST_GAMBLE) gamble_draw();
+  fx_draw_top();                          /* transitions, top-layer effects */
   if(G.flash>0.001f){
     float f=G.flash; if(opt_limiter && f>0.35f) f=0.35f;
     screen_tint(0xFFFFFF,(int)(f*110));
   }
+  fx_post();                              /* whole-frame post pass (shake)  */
 }
 
 /* ═══ LIBRETRO API ════════════════════════════════════════════════ */

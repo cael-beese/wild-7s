@@ -21,6 +21,7 @@ static long long spins, cost, won;
 static long long jpTrig[NJP];
 static double    jpWonTot[NJP];
 static long long hits, fsTrig, pkTrig, fsWonTot, pkWonTot, baseWonTot, scatWonTot;
+static long long hoTrig, whTrig, hoWonTot, whWonTot, stormN;
 static long long bandhit[NSYM][6], bandwon[NSYM][6], bandways[NSYM][6], bandwt[NSYM][6];
 static long long multhist[64], fsSpins;
 static long long sizehist[26];
@@ -137,6 +138,7 @@ int main(int argc,char**argv){
     jp_contribute(TOTBET);
 
     G.inFree=0; G.fsMult=1;
+    extra_on_spin_start(); if(G.extra.stormArmed) stormN++;
     spin_reels(); evaluate();
     take_jackpot();
     long long w = G.winTotal;
@@ -150,6 +152,9 @@ int main(int argc,char**argv){
     }
     if(G.scatCount>=3) scatWonTot += SCATPAY[G.scatCount>5?5:G.scatCount]*TOTBET;
 
+    /* the new features, played out by their own modules' logic */
+    if(hold_triggered()) { long long p=hold_sim_play();  hoTrig++; hoWonTot+=p; w+=p; }
+    if(wheel_triggered()){ long long p=wheel_sim_play(); whTrig++; whWonTot+=p; w+=p; }
     int scat=G.scatCount, crown=G.bonusCount;
 
     if(crown>=3){
@@ -163,7 +168,10 @@ int main(int argc,char**argv){
       G.inFree=1; G.fsMult=1;
       while(left>0){
         left--; fsSpins++;
+        extra_on_spin_start();
         spin_reels(); evaluate();
+        if(hold_triggered()) { long long p=hold_sim_play();  hoTrig++; hoWonTot+=p; fw+=p; }
+        if(wheel_triggered()){ long long p=wheel_sim_play(); whTrig++; whWonTot+=p; fw+=p; }
         { int mm=G.fsMult<1?1:(G.fsMult>63?63:G.fsMult); multhist[mm]++; }
         take_jackpot();
         fw += G.winTotal;
@@ -185,6 +193,9 @@ int main(int argc,char**argv){
   printf("  base game      %.2f%%   of which scatter pays %.2f%%\n", base, 100.0*scatWonTot/cost);
   printf("  free spins     %.2f%%\n", fs);
   printf("  pick bonus     %.2f%%\n", pk);
+  printf("  hold & spin    %.2f%%   1 in %.0f spins\n", 100.0*hoWonTot/cost, (double)spins/(hoTrig?hoTrig:1));
+  printf("  wheel bonus    %.2f%%   1 in %.0f spins\n", 100.0*whWonTot/cost, (double)spins/(whTrig?whTrig:1));
+  printf("  7 strike       1 in %.0f spins\n", (double)spins/(stormN?stormN:1));
   { double jt=0;
     for(int i=0;i<NJP;i++) jt+=jpWonTot[i];
     printf("  jackpots       %.2f%%   (as they fell in the sample)\n", 100.0*jt/cost); }
@@ -203,7 +214,7 @@ int main(int argc,char**argv){
      jackpots are ignored here; the base-game figure is the design one. */
   printf("-----------------------------------------\n");
   double rates=0; for(int i=0;i<NJP;i++) rates+=100.0*JP_RATE[i];
-  double game = base+fs+pk;
+  double game = base+fs+pk+100.0*(hoWonTot+whWonTot)/cost;
   printf("RTP              game %.2f%% + contributions %.2f%% + bet multiples:\n", game, rates);
   printf("  %9s %9s %9s %9s %11s   %8s\n","ULTIMATE","MEGA","MAJOR","MINOR","multiples","RTP");
   { double sd[NJP], st=0;

@@ -6,10 +6,11 @@
 TARGET := wild7_libretro.so
 SRC    := src/wild7_libretro.c
 HDR    := src/libretro.h
+MODS   := $(wildcard src/w7_*.c src/w7_*.h)
 ARCH   := $(shell uname -m)
 
 CFLAGS  := -O3 -ffast-math -fno-math-errno -fPIC -Wall -Wextra -Isrc
-LDFLAGS := -shared -lm
+LDFLAGS := -shared -lm -lpthread
 
 # Flags common to every target, captured before the host-specific
 # tuning below is appended.  The Android cross-build uses these.
@@ -36,7 +37,7 @@ $(HDR):
 	  https://raw.githubusercontent.com/libretro/libretro-common/master/include/libretro.h \
 	  || (echo "download failed — copy libretro.h into src/ by hand"; exit 1)
 
-$(TARGET): $(SRC) $(HDR)
+$(TARGET): $(SRC) $(HDR) $(MODS)
 	$(CC) $(CFLAGS) -o $@ $(SRC) $(LDFLAGS)
 	@echo "built $@ for $(ARCH)"
 
@@ -73,7 +74,7 @@ NDK_BIN   = $(NDK_HOME)/toolchains/llvm/prebuilt/$(NDK_HOST)/bin
 android: android-armeabi-v7a android-arm64-v8a
 
 define ANDROID_RULE
-android-$(1): $$(SRC) $$(HDR)
+android-$(1): $$(SRC) $$(HDR) $$(MODS)
 	@test -n "$$(NDK_HOME)" || { echo "set NDK_HOME (or ANDROID_NDK_HOME) to an Android NDK"; exit 1; }
 	@test -x "$$(NDK_BIN)/$(2)" || { echo "no NDK clang at $$(NDK_BIN)/$(2)"; exit 1; }
 	@mkdir -p android/$(1)
@@ -86,3 +87,16 @@ $(eval $(call ANDROID_RULE,arm64-v8a,aarch64-linux-android$(NDK_API)-clang,))
 
 clean-android:
 	rm -rf android
+
+# =====================================================================
+#  Development tools (also build in WSL):
+#    make sim     RTP simulator  ->  ./w7sim 5000000 [betIdx]
+#    make shot    headless frame dumper -> ./w7shot -n 600 -s 120,599 -o dir
+# =====================================================================
+.PHONY: sim shot
+sim: w7sim
+shot: w7shot
+w7sim: src/sim.c $(SRC) $(HDR) $(MODS)
+	$(CC) -O2 -Isrc -o $@ src/sim.c -lm -lpthread
+w7shot: tools/w7shot.c $(SRC) $(HDR) $(MODS)
+	$(CC) -O2 -Isrc -o $@ tools/w7shot.c -lm -lz -lpthread
