@@ -168,16 +168,56 @@ already showing, the last reels are held back an extra second.
 
 ## Sound
 
-The core has a four-waveform synth — square, triangle, saw and filtered
-noise — with a decaying envelope per voice, which is fine for a button click
-and useless for a fanfare, because everything fired the instant it was asked
-for. A voice can now be handed a **start delay**, so a phrase is written the
-way a music box is punched: all of its notes queued at once at their
-offsets, and the mixer holds each one back until its moment. Forty-eight
-voices, because the top fanfare queues two dozen of them.
+Everything you hear is synthesised in `src/w7_audio.c`: no samples, no
+dependencies, stereo at 44.1 kHz.
+
+**The synth.** One voice type plays everything: band-limited (PolyBLEP)
+square and saw, triangle, sine, a two-operator FM bell for the casino
+"ding", a Karplus-Strong plucked string, swept band-pass noise for whooshes
+and risers, and a "brass" of two detuned saws through a low-pass that opens
+with the envelope. Each voice has an attack/decay/sustain/release envelope,
+a pitch sweep (linear, exponential drop, or musical glide), a place in the
+stereo field and a send to a stereo hall reverb. The reel stops are panned
+to their reel. Sixty-four voices for effects and thirty-two for music, in
+separate pools so neither can starve the other; when a pool is full the
+quietest voice is stolen and faded out over 3 ms rather than cut. The
+master bus is DC-blocked, then a peak limiter, then a soft clip whose
+ceiling is -0.35 dBFS, so the biggest fanfare squashes instead of
+cracking. The synth has its own random numbers: sound on or off can never
+change what the reels do.
+
+A voice can be handed a **start delay**, so a phrase is written the way a
+music box is punched: all of its notes queued at once at their offsets, and
+the mixer holds each one back until its moment.
+
+**The music** is a small sequencer playing tunes written as text in the
+source, one lane per instrument, and the game state picks the tune every
+frame, crossfading between them and ducking under loud effects:
+
+| | |
+|---|---|
+| base game | a quiet ii-V lounge in F: tine piano, walking upright bass, brushed ride, vibes |
+| FREE SPINS | four on the floor, Am F C G, pumping octave bass and a pluck arpeggio; a shaker joins at x2 and brass stabs at x3 |
+| LUCKY 7 PICK | a playful oom-pa in F with a marimba tune |
+| HOLD & SPIN | a heartbeat over a pulsing D pedal; the tempo climbs as the grid fills and strings, ticking and taiko come in |
+| WHEEL | a snare roll swelling over timpani and a brass suspension |
+| jackpots, bonus ends | silence under the fanfare, which is the music |
+
+**The effects.** Spinning up is a whoosh and a lever clunk; each reel lands
+with a thunk pitched and panned to its reel, and a slam rolls the five of
+them rather than stacking them. A scatter or a crown landing rings a note
+that climbs with every one showing, and the third fires the trigger chord.
+While a reel is held back for a bonus a riser, a rising string pair and a
+heartbeat play until it lands, and the music drops away. Wins get a jingle
+scaled to their size - two bells, an arpeggio, a fanfare - and BIG, HUGE
+and EPIC fanfares above that; the roll-up ticks climb in pitch and finish
+on a register "ding-ding". The bet buttons climb a pentatonic scale with
+the bet, and ADD CREDITS is a cash-register cha-ching and coins in the
+tray.
 
 Each jackpot has its own phrase, built to be told apart with your back to
-the machine. They get longer, lower-rooted and denser as the prize grows:
+the machine. They get longer, lower-rooted and denser as the prize grows,
+and they are now brass over timpani, landing on cymbals and a sub drop:
 
 | | |
 |---|---|
@@ -192,6 +232,11 @@ and the ULTIMATE gets six seconds of them rather than three.
 The multiplier has its own sound, and **its root rises with the level** — C6
 at x2 up to C7 at x5 — so the ear knows how high the meter went without
 reading the panel. The x2 panel in the pick round uses the same voice.
+
+`w7shot -w out.wav` records everything the core hands RetroArch and prints
+its peak, RMS and DC offset; `make audio` builds `w7audio`, which times the
+mixer at its worst case, checks every voice type for clicks at start and
+end, and (`w7audio stat a.wav`) measures a recording.
 
 ## Graphics
 
@@ -318,8 +363,9 @@ driver, against a 16.67 ms budget:
 | the ULTIMATE celebration | 14.9 | 89% |
 
 The live marquee costs 2.0 ms of that, the wild badges and the multiplier
-banner about 0.3 ms. Going from twelve mixer voices to forty-eight costs
-nothing measurable: it is 35,000 multiply-adds a frame, against nine hundred
+banner about 0.3 ms. The whole sound engine - forty-eight busy effect
+voices, the music and the reverb - is about 0.3 ms a frame on x86 in
+`w7audio`, so roughly 1.3 ms on the Pi, against nine hundred
 thousand pixels. Twenty-five 106px sprites a frame
 come to fewer pixels than the old fifteen at 152px, and every per-frame
 optimisation from the 5x3 build carries over: rounded-rect primitives that
@@ -332,6 +378,7 @@ the sprites, per-row sprite spans.
 RetroArch Quick Menu -> Core Options, or edit `wild7.w7`:
 
 - **Sound** (default on)
+- **Music** (default on) — the background tunes; the effects stay on
 - **Turbo spin** (default off) — halves the gaps between reel stops
 - **Flash limiter** (default on) — damps the win flashes
 

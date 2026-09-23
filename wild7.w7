@@ -1,11 +1,13 @@
 ; WILD 7's — cabinet settings. The core reads this at load; blank is fine.
 ;
 ; sound=on|off
+; music=on|off      background music (sound effects stay on)
 ; turbo=on|off      faster reel spins
 ; limiter=on|off    cap flashing (leave on if photosensitive)
 ; credits=N         starting bank
 
 sound=on
+music=on
 turbo=off
 limiter=on
 credits=5000
