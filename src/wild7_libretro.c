@@ -65,6 +65,7 @@ static int opt_turbo    = 0;   /* faster reel spins                    */
  *                    =3  a single spin, then no further input
  *    WILD7_FORCE=free|pick             land a bonus trigger
  *    WILD7_FORCE=mega|minor           force the jackpot roll to hit
+ *    WILD7_FORCE=wheel                WHEEL on reels 2, 3 and 4
  * ──────────────────────────────────────────── */
 static int dbg_pilot = 0, dbg_force = 0;
 static long dbg_frame = 0;
@@ -1430,7 +1431,7 @@ static uint8_t CNT[3][NSYM] = {
  *  PROVISIONAL - taken out of the low fruit - until the maths pass.     */
 /*        7   D   B  BAR  GR  OR  PL  CH  LE  ST  CR  JP  UL  CO  WH  */
   {       2,  8,  9, 10, 11, 11, 12, 11,  9,  2,  3,  0,  2,  6,  0 },  /* reels 1,5 */
-  {       2,  8,  9, 10, 11, 11, 11, 11, 10,  1,  0,  3,  1,  6,  2 },  /* reels 2,4 */
+  {       2,  8,  9, 10, 11, 11, 11, 11,  9,  1,  0,  3,  1,  6,  3 },  /* reels 2,4 */
   {       2,  8,  9, 10, 10, 11, 11, 10,  8,  2,  3,  3,  1,  6,  2 },  /* reel 3    */
 };
 static uint8_t STK[3][NSYM] = {
@@ -2267,6 +2268,7 @@ static int force_demand(int r,int*symo,int*rows){
     if(r==2){ *symo=SY_JACKPOT; rows[0]=1; rows[1]=2; rows[2]=3; return 3; }
     return 0;
   case 6:  *symo=SY_ULT; rows[0]=2; return 1;                                  /* ult   */
+  case 7:  if(r>=1&&r<=3){ *symo=SY_WHEEL; rows[0]=2; return 1; } return 0;     /* wheel */
   }
   return 0;
 }
@@ -3710,22 +3712,26 @@ static void draw_marquee(void){
 #include "w7_extra.c"
 
 static void render(void){
-  memcpy(fb,bg,sizeof fb);
-  draw_marquee();
-  if(G.state==ST_HOLD) hold_draw();       /* the bonus owns the reel window */
+  /* The wheel scene covers every pixel, so the cabinet is not drawn
+     under it (~2.5 ms saved); wheel_draw() draws the particles itself. */
+  if(G.state==ST_WHEEL) wheel_draw();
   else {
-    draw_reels();
-    hold_draw_cells();                    /* coin values over landed coins  */
-    extra_draw_reels();                   /* 7 STRIKE over the reels        */
+    memcpy(fb,bg,sizeof fb);
+    draw_marquee();
+    if(G.state==ST_HOLD) hold_draw();     /* the bonus owns the reel window */
+    else {
+      draw_reels();
+      hold_draw_cells();                  /* coin values over landed coins  */
+      extra_draw_reels();                 /* 7 STRIKE over the reels        */
+    }
+    draw_features();
+    draw_wins();
+    draw_parts();
+    fx_draw();                            /* world-layer effects            */
+    draw_meters();
+    draw_overlays();
   }
-  draw_features();
-  draw_wins();
-  draw_parts();
-  fx_draw();                              /* world-layer effects            */
-  draw_meters();
-  draw_overlays();
-  if(G.state==ST_WHEEL)  wheel_draw();    /* full-screen feature scenes     */
-  if(G.state==ST_GAMBLE) gamble_draw();
+  if(G.state==ST_GAMBLE) gamble_draw();   /* full-screen feature scenes     */
   fx_draw_top();                          /* transitions, top-layer effects */
   if(G.flash>0.001f){
     float f=G.flash; if(opt_limiter && f>0.35f) f=0.35f;
@@ -3753,7 +3759,8 @@ void retro_init(void){
     if((e=getenv("WILD7_FORCE")))
       dbg_force = !strcmp(e,"free")?1:(!strcmp(e,"pick")?2:
                   (!strcmp(e,"win")?3:(!strcmp(e,"mega")?4:
-                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:0)))));
+                  (!strcmp(e,"minor")?5:(!strcmp(e,"ult")?6:
+                  (!strcmp(e,"wheel")?7:0))))));
   }
   if(!assets_ready){
     build_strips();
