@@ -195,6 +195,7 @@ int main(int argc,char**argv){
   printf("  pick bonus     %.2f%%\n", pk);
   printf("  hold & spin    %.2f%%   1 in %.0f spins\n", 100.0*hoWonTot/cost, (double)spins/(hoTrig?hoTrig:1));
   printf("  wheel bonus    %.2f%%   1 in %.0f spins\n", 100.0*whWonTot/cost, (double)spins/(whTrig?whTrig:1));
+  hold_sim_report();                          /* w7_hold.c: how the prizes spread */
   printf("  7 strike       1 in %.0f spins\n", (double)spins/(stormN?stormN:1));
   { double jt=0;
     for(int i=0;i<NJP;i++) jt+=jpWonTot[i];
