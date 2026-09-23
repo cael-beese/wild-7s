@@ -50,7 +50,7 @@
  *  STORM_ODDS may be overridden at compile time: -DSTORM_ODDS=0 turns
  *  the feature off, which is how its RTP contribution is measured.     */
 #ifndef STORM_ODDS
-#define STORM_ODDS 80                   /* one base spin in this many */
+#define STORM_ODDS 100                  /* one base spin in this many */
 #endif
 #define STORM_K 24                      /* candidate placements scored */
 static const int STORM_W[EX_MAXSTRIKE+1] = { 0,0,0, 34,26,18,12, 7, 3 };   /* weight   */

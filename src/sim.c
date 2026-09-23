@@ -22,6 +22,15 @@ static long long jpTrig[NJP];
 static double    jpWonTot[NJP];
 static long long hits, fsTrig, pkTrig, fsWonTot, pkWonTot, baseWonTot, scatWonTot;
 static long long hoTrig, whTrig, hoWonTot, whWonTot, stormN;
+/*  SEEDS=1 (the default) keeps every pot at its bet-multiple seed: the
+    pots are emptied before each spin instead of growing, so everything
+    won is a seed or a credit prize, and the long-run return is exactly
+    that plus the tenth of every bet that feeds the pots.  Pots growing
+    are only a transfer from the contributions, which a Monte-Carlo run
+    would otherwise count twice (hold and wheel pay pots too) and whose
+    ULTIMATE hits swing any finite sample by whole percent. */
+static int SEEDS=1;
+static long long ultWon;
 static long long bandhit[NSYM][6], bandwon[NSYM][6], bandways[NSYM][6], bandwt[NSYM][6];
 static long long multhist[64], fsSpins;
 static long long sizehist[26];
@@ -53,6 +62,7 @@ static long long sim_pick(void){
 static void take_jackpot(void){
   if(G.jpWon<0) return;
   jpTrig[G.jpWon]++; jpWonTot[G.jpWon]+=(double)G.jpAmt; won+=G.jpAmt;
+  if(G.jpWon==JP_ULT) ultWon+=G.jpAmt;
   G.jpWon=-1; G.jpAmt=0;
 }
 
@@ -113,6 +123,7 @@ int main(int argc,char**argv){
   int betIdx  = (argc>2)? atoi(argv[2]) : 0;
   if(argc>3) FS_AWARD   = atoi(argv[3]);      /* sweep the feature dials */
   if(argc>4) FS_MAXMULT = atoi(argv[4]);
+  { const char*e=getenv("W7SIM_POTS"); if(e && !strcmp(e,"grow")) SEEDS=0; }  /* pots as they fell */
   rngs = 0xC0FFEEu;
   build_strips();
   memset(&G,0,sizeof G);
@@ -135,7 +146,7 @@ int main(int argc,char**argv){
 
   for(long long i=0;i<N;i++){
     spins++; cost += TOTBET;
-    jp_contribute(TOTBET);
+    if(SEEDS) memset(G.jpAcc,0,sizeof G.jpAcc); else jp_contribute(TOTBET);
 
     G.inFree=0; G.fsMult=1;
     extra_on_spin_start(); if(G.extra.stormArmed) stormN++;
@@ -189,6 +200,13 @@ int main(int argc,char**argv){
   printf("total won        %lld\n", won);
   printf("-----------------------------------------\n");
   double base=100.0*baseWonTot/cost, fs=100.0*fsWonTot/cost, pk=100.0*pkWonTot/cost;
+  if(SEEDS){
+    double rates=0; for(int i=0;i<NJP;i++) rates+=100.0*JP_RATE[i];
+    double ultx=100.0*JP_MULT[JP_ULT]*exact_jp[JP_ULT];
+    printf("RTP              %.2f%%   LONG RUN: %.2f%% prizes and seeds (ULTIMATE aside)\n"
+           "                            + %.2f%% contributions + %.3f%% ULTIMATE seed, exact odds\n",
+           100.0*(won-ultWon)/cost+rates+ultx, 100.0*(won-ultWon)/cost, rates, ultx);
+  } else
   printf("RTP              %.2f%%   (monte-carlo, progressives as they fell)\n", 100.0*won/cost);
   printf("  base game      %.2f%%   of which scatter pays %.2f%%\n", base, 100.0*scatWonTot/cost);
   printf("  free spins     %.2f%%\n", fs);

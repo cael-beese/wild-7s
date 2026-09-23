@@ -2444,8 +2444,8 @@ static const char*BANDNAME[3]={"3 REELS","4 REELS","5 REELS"};
 static const int PAY[NSYM][6] = {
 /*                 0  1  2    3    4    5   reels */
 /* SEVEN   */    { 0, 0, 0,   4,  15, 148 },
-/* DIAMOND */    { 0, 0, 0,   3,   9,  48 },
-/* BELL    */    { 0, 0, 0,   2,   6,  28 },
+/* DIAMOND */    { 0, 0, 0,   3,   9,  42 },
+/* BELL    */    { 0, 0, 0,   2,   6,  25 },
 /* BAR     */    { 0, 0, 0,   2,   5,  17 },
 /* GRAPES  */    { 0, 0, 0,   1,   3,  11 },
 /* ORANGE  */    { 0, 0, 0,   1,   3,   9 },
@@ -2648,7 +2648,7 @@ typedef struct {
   float jpT;
 
   int   addIdx, addFrom;      /* the ADD CREDITS chooser               */
-  int   ptPage;               /* 0 pay table, 1 features               */
+  int   ptPage;               /* 0 pay table, 1 features, 2 more       */
 
   int   lastWin, banner;
   float bannerT;
@@ -3072,7 +3072,7 @@ static void award(long long amt){
 /* how many scatters, or crowns, are already showing on the reels that
    have stopped — the anticipation hold keys off the larger count */
 static int partial_special(void){
-  int st=0, cr=0;
+  int st=0, cr=0, wh=0;
   for(int r=0;r<NREEL;r++){
     if(G.rstate[r]!=3) continue;
     int base=(int)floorf(G.rpos[r]+0.5f);
@@ -3080,9 +3080,11 @@ static int partial_special(void){
       int s=stripAt(r,base-row);
       if(s==SY_STAR) st++;
       if(s==SY_CROWN) cr++;
+      if(s==SY_WHEEL) wh++;        /* two wheels down: the third reel is held too */
     }
   }
-  return st>cr?st:cr;
+  int m=st>cr?st:cr;
+  return wh>m?wh:m;
 }
 
 /* ── the feature queue ─────────────────────────────────────────────
@@ -3151,7 +3153,7 @@ static int force_demand(int r,int*symo,int*rows){
   switch(dbg_force){
   case 1:  if(r<3){ *symo=SY_STAR; rows[0]=2; return 1; } return 0;          /* free  */
   case 2:  if(r==0||r==2||r==4){ *symo=SY_CROWN; rows[0]=2; return 1; } return 0;  /* pick */
-  case 3:  *symo=SY_CHERRY; rows[0]=1; rows[1]=2; rows[2]=3; return 3;         /* win   */
+  case 3:  if(r<3){ *symo=SY_CHERRY; rows[0]=2; return 1; } return 0;            /* win: a 3-reel cherry line */
   case 4:  /* mega: reels 2,3,4 stacks aligned = 2+3+2 */
     if(r==1||r==3){ *symo=SY_JACKPOT; rows[0]=1; rows[1]=2; return 2; }
     if(r==2){ *symo=SY_JACKPOT; rows[0]=1; rows[1]=2; rows[2]=3; return 3; }
@@ -3474,7 +3476,7 @@ static void update(void){
 
   case ST_PAYTABLE:
     if(G.t>0.3f){
-      if(hit(B_SELECT)){ G.ptPage^=1; G.t=0; sfx_ui_page(); }
+      if(hit(B_SELECT)){ G.ptPage=(G.ptPage+1)%3; G.t=0; sfx_ui_page(); }
       else if(anyhit()){ G.state=ST_IDLE; G.t=0; }
     }
     break;
@@ -4898,12 +4900,12 @@ static void draw_features(void){
     rail_panel(RRX,LWY,RAILW,GY+GH-LWY,0x1B2038,0x070A16,c,"LAST WIN",0xFFFFFF);
     blit_half(&sym[G.winSym[w]],RRX+14,LWY+30);
     text(SYMNAME[G.winSym[w]],RRX+76,LWY+34,2,0xFFFFFF,0,1);
-    snprintf(b,sizeof b,"%d REELS  X %d WAY%s",G.winCnt[w],G.winWays[w],G.winWays[w]==1?"":"S");
+    snprintf(b,sizeof b,"%d REELS  %d WAY%s",G.winCnt[w],G.winWays[w],G.winWays[w]==1?"":"S");
     text(b,RRX+76,LWY+56,2,c,0,1);
     if(G.winWt[w]>G.winWays[w]){
       float pl=0.6f+0.4f*sinf(G.t*8.0f);
-      snprintf(b,sizeof b,"WILD X%d",G.winWt[w]/G.winWays[w]);
-      text(b,RRX+RAILW-14,LWY+56,2,mixc(0xFFC24A,0xFFFFFF,pl*0.6f),2,1);
+      snprintf(b,sizeof b,"WILD BOOST X%d",G.winWt[w]/G.winWays[w]);   /* its own line: it used to sit on top of the ways */
+      text(b,RRX+76,LWY+100,2,mixc(0xFFC24A,0xFFFFFF,pl*0.6f),0,1);
     }
     snprintf(b,sizeof b,"PAYS %d",G.winAmt[w]);
     text(b,RRX+76,LWY+78,2,0xFFE9A8,0,1);
@@ -5042,24 +5044,24 @@ static void render_commit(void){
 }
 static void fcache_free(fcache_t*c){ free(c->px); memset(c,0,sizeof *c); }
 
-static fcache_t ptbg, bnbg, ptimg[2], bnimg;
+static fcache_t ptbg, bnbg, ptimg[3], bnimg;
 static void bonus_invalidate(void){ bnimg.valid=0; }
 
 static void cache_backdrop(fcache_t*slot, void(*paint)(void)){
   frame_cache(slot,0,paint);
 }
 
-/* pay table rows: 13 symbols in two columns */
+/* pay table rows: 15 symbols in two columns of eight */
 #define PTX0 40
 #define PTX1 660
 #define PTY0 78
-#define PTRH 74
+#define PTRH 64
 
 static void paint_paytable_bg(void){
   vgrad(0,0,FBW,FBH,0x12173A,0x03040C);
   fb_rframe(14,10,FBW-28,FBH-20,14,3.0f,0xE8B93C,255);
   for(int i=0;i<NSYM;i++){
-    int col=i/7, row=i%7;
+    int col=i/8, row=i%8;
     int x=(col?PTX1:PTX0), y=PTY0+row*PTRH;
     fb_rrect(x-8,y-4,588,PTRH-6,10,0x1E2450,150);
   }
@@ -5069,105 +5071,136 @@ static void paint_paytable(void){
   cache_backdrop(&ptbg,paint_paytable_bg);
   textb("PAY TABLE",FBW/2,14,5,GOLDG,5,1);
   char b[96];
-  /* the band header over each column */
-  for(int col=0;col<2;col++){
-    int x=(col?PTX1:PTX0)+72;
+  /* the band header over the first column, the only one with pays */
+  { int x=PTX0+72;
     for(int k=0;k<3;k++) text(BANDNAME[k],x+120+k*130,PTY0-14,1,0xFFC24A,1,1);
-    text("X BET, PER WAY",x,PTY0-14,1,0xFFC24A,0,1);
-  }
+    text("X BET, PER WAY",x,PTY0-14,1,0xFFC24A,0,1); }
   for(int i=0;i<NSYM;i++){
-    int col=i/7, row=i%7;
+    int col=i/8, row=i%8;
     int x=(col?PTX1:PTX0), y=PTY0+row*PTRH;
-    blit_half(&sym[i],x+2,y+6);
-    text(SYMNAME[i],x+72,y+6,2,0xFFFFFF,0,1);
+    blit_half(&sym[i],x+2,y+1);
+    text(SYMNAME[i],x+72,y+3,2,0xFFFFFF,0,1);
     if(i<NPAYSYM){
       /* pays as multiples of the total bet, one decimal where it needs it */
       for(int k=0;k<3;k++){
         float mult=PAY[i][k+3]/10.0f;
         if(mult>=10.0f) snprintf(b,sizeof b,"%.0f",mult);
         else            snprintf(b,sizeof b,"%.1f",mult);
-        text(b,x+192+k*130,y+28,2,0xFFE9A8,1,1);
+        text(b,x+192+k*130,y+22,2,0xFFE9A8,1,1);
       }
-      if(i==SY_SEVEN) text("STANDS IN FOR ANY SYMBOL - AND DOUBLES EVERY WIN IT JOINS",x+72,y+52,1,0xFFC24A,0,1);
-      else            text("X TOTAL BET, TIMES THE NUMBER OF WAYS",x+72,y+52,1,0x8A93B8,0,1);
-    } else if(i==SY_STAR){
-      snprintf(b,sizeof b,"3 / 4 / 5 ANYWHERE = %d / %d / %d X BET",SCATPAY[3],SCATPAY[4],SCATPAY[5]);
-      text(b,x+72,y+30,2,0xC8D8FF,0,1);
-      text("3+ = 8 FREE SPINS, EXPANDING WILDS",x+72,y+50,2,0xFFC24A,0,1);
-    } else if(i==SY_CROWN){
-      text("3 CROWNS = LUCKY 7 PICK BONUS",x+72,y+30,2,0xFFC24A,0,1);
-      text("THEY LAND ON REELS 1, 3 AND 5",x+72,y+50,2,0xC8D8FF,0,1);
-    } else if(i==SY_JACKPOT){
-      text("5 = MINOR, 5 X BET.  6 = MAJOR, 40 X.  7+ = MEGA, 200 X",x+72,y+30,2,0xFFC24A,0,1);
-      text("LANDS ON REELS 2, 3 AND 4",x+72,y+50,2,0xC8D8FF,0,1);
-    } else if(i==SY_ULT){
-      text("5 TOUCHING = THE ULTIMATE, 100,000 X BET",x+72,y+30,2,0xFFC24A,0,1);
-      text("1,000,000 AT THE SMALLEST BET, AND UP FROM THERE",x+72,y+50,2,0xC8D8FF,0,1);
+      if(i==SY_SEVEN) text("STANDS IN FOR ANY SYMBOL - AND DOUBLES EVERY WIN IT JOINS",x+72,y+42,1,0xFFC24A,0,1);
+      else            text("X TOTAL BET, TIMES THE NUMBER OF WAYS",x+72,y+42,1,0x8A93B8,0,1);
+      continue;
     }
+    const char*l1="", *l2="";
+    switch(i){
+    case SY_STAR:
+      snprintf(b,sizeof b,"3 / 4 / 5 ANYWHERE PAY %d / %d / %d X BET",SCATPAY[3],SCATPAY[4],SCATPAY[5]);
+      l1=b; l2="3 OR MORE = FREE SPINS";                                   break;
+    case SY_CROWN:   l1="3 CROWNS = LUCKY 7 PICK BONUS";       l2="LAND ON REELS 1, 3 AND 5";          break;
+    case SY_JACKPOT: l1="5 MINOR 5X   6 MAJOR 40X   7+ MEGA 200X"; l2="LANDS ON REELS 2, 3 AND 4"; break;
+    case SY_ULT:     l1="5 TOUCHING = ULTIMATE, 100,000 X BET"; l2="ONE ON EACH REEL, IN A CHAIN";     break;
+    case SY_COIN:    l1="6 OR MORE ANYWHERE = HOLD & SPIN";    l2="EACH SHOWS CREDITS, OR MINOR / MAJOR"; break;
+    case SY_WHEEL:   l1="ONE ON REELS 2, 3 AND 4 = THE WHEEL"; l2="WHEEL OF 7'S - UP TO THE MEGA JACKPOT"; break;
+    }
+    text(l1,x+72,y+22,2,0xFFC24A,0,1);
+    text(l2,x+72,y+40,2,0xC8D8FF,0,1);
   }
   text("A WIN READS LEFT TO RIGHT FROM REEL 1: ONE SYMBOL PER REEL, SAME ROW OR ONE UP OR DOWN",
        FBW/2,602,2,0xFFFFFF,1,1);
   text("A TENTH OF EVERY BET FEEDS THE JACKPOTS, AND ALL FOUR ARE A MULTIPLE OF THE BET YOU PLAY",
        FBW/2,624,2,0xFFC24A,1,1);
-  text("EVERY PATH IS A WAY AND PAYS AGAIN, AND EVERY WILD IN IT DOUBLES THE WIN.   BET 10 TO 10,000 A SPIN.",FBW/2,646,2,0xAFAFC8,1,1);
+  text("EVERY PATH IS A WAY AND PAYS AGAIN, AND EVERY WILD IN IT DOUBLES THE WIN.   BET 10 TO 100,000 A SPIN.",FBW/2,646,2,0xAFAFC8,1,1);
 }
 
-
-/*  Page two of the pay table: how the features are won AND how they are
- *  played, so nobody has to learn the pick round by losing it.        */
-static void paint_features(void){
+/*  A features page: four bands, each an icon, a title and up to four
+ *  lines - how the features are won AND how they are played, so nobody
+ *  has to learn the pick round or the gamble by losing it.            */
+struct ftband { const char*title; uint32_t col; int sy1, sy2; const char*ln[4]; };
+static void paint_ftpage(const char*head,const struct ftband*B){
   vgrad(0,0,FBW,FBH,0x12173A,0x03040C);
   fb_rframe(14,10,FBW-28,FBH-20,14,3.0f,0xE8B93C,255);
-  textb("FEATURES",FBW/2,14,5,GOLDG,5,1);
-
-  struct band { const char*title; uint32_t col; int sy1, sy2; const char*ln[5]; };
-  static const struct band B[4] = {
-    { "WILD 7 - THE MULTIPLIER SYMBOL", 0xFFC24A, SY_SEVEN, -1, {
-      "WILD 7 STANDS IN FOR EVERY PAYING SYMBOL, AND DOUBLES EVERY WIN IT IS PART OF",
-      "TWO WILDS IN ONE WIN PAY FOUR TIMES, THREE PAY EIGHT TIMES, AND SO ON",
-      "THE WILDS IN A WIN LIGHT UP WEARING THEIR X2 SO YOU CAN SEE WHERE IT CAME FROM",
-      NULL, NULL } },
-    { "FREE SPINS", 0x7CFF6A, SY_STAR, -1, {
-      "3 OR MORE SCATTERS AWARD 8 FREE SPINS - 3 MORE DURING THE FEATURE ADD 4 MORE",
-      "EXPANDING WILDS: A WILD 7 LANDING ON REEL 2, 3 OR 4 GROWS TO FILL ITS WHOLE REEL",
-      "AND NOTCHES THE MULTIPLIER UP ONE - IT NEVER FALLS BACK, AND CLIMBS TO X5",
-      "IT TIMES THE WHOLE SPIN, ON TOP OF THE X2 EVERY WILD ALREADY PAYS. SCATTERS PAY TOO",
-      NULL } },
-    { "LUCKY 7 PICK", 0xC060FF, SY_CROWN, -1, {
-      "3 CROWNS (THEY LAND ON REELS 1, 3 AND 5) OPEN A BOARD OF NINE HIDDEN PANELS",
-      "D-PAD MOVES THE CURSOR, A TURNS A PANEL.  PANELS HIDE CREDITS, A X2 MULTIPLIER, OR A STOP",
-      "THE ROUND ENDS ON THE THIRD STOP, SO YOU USUALLY GET FOUR OR FIVE PICKS",
-      "THE MULTIPLIER APPLIES TO EVERYTHING YOU COLLECTED.  A COLLECTS AT THE END",
-      NULL } },
-    { "PROGRESSIVE JACKPOTS", 0xFFB020, SY_JACKPOT, SY_ULT, {
-      "JACKPOT LANDS ON REELS 2, 3 AND 4.  5 TOUCHING = MINOR, 6 = MAJOR, 7 OR MORE = MEGA",
-      "ULTIMATE LANDS ONE PER REEL.  ALL FIVE TOUCHING = THE ULTIMATE, 100,000 TIMES YOUR BET",
-      "EVERY POT IS A MULTIPLE OF YOUR BET - 5X, 40X, 200X, 100,000X - PLUS EVERYTHING FED IN",
-      "A TENTH OF EVERY BET FEEDS THEM, SO RAISING YOUR BET RAISES ALL FOUR METERS AT ONCE",
-      NULL } },
-  };
+  textb(head,FBW/2,14,5,GOLDG,5,1);
   for(int i=0;i<4;i++){
     int y=70+i*152, h=142;
     fb_rrect(30,y,FBW-60,h,14,0x1E2450,150);
     fb_rframe(30,y,FBW-60,h,14,2.0f,B[i].col,200);
-    blit_half(&sym[B[i].sy1],46,y+14);
+    if(B[i].sy1>=0) blit_half(&sym[B[i].sy1],46,y+14);
     if(B[i].sy2>=0) blit_half(&sym[B[i].sy2],46,y+76);
     text(B[i].title,120,y+12,3,B[i].col,0,1);
     for(int k=0;k<4 && B[i].ln[k];k++) text(B[i].ln[k],120,y+44+k*24,2,k==0?0xFFFFFF:0xC8D8FF,0,1);
   }
 }
 
-/*  Both of these screens are static between player actions, and both
- *  were repainting every rounded rectangle and every string sixty times
- *  a second: the bonus board measured 37 ms a frame on its own.  Paint
- *  once into a buffer, then blit it and draw only what animates.      */
+static void paint_features(void){
+  char fs1[96];
+  snprintf(fs1,sizeof fs1,"3 OR MORE SCATTERS AWARD %d FREE SPINS - 3 MORE DURING THE FEATURE ADD %d",
+           FS_AWARD,FS_RETRIG);
+  const struct ftband B[4] = {
+    { "WILD 7 - THE MULTIPLIER SYMBOL", 0xFFC24A, SY_SEVEN, -1, {
+      "WILD 7 STANDS IN FOR EVERY PAYING SYMBOL, AND DOUBLES EVERY WIN IT IS PART OF",
+      "TWO WILDS IN ONE WIN PAY FOUR TIMES, THREE PAY EIGHT TIMES, AND SO ON",
+      "THE WILDS IN A WIN LIGHT UP WEARING THEIR X2 SO YOU CAN SEE WHERE IT CAME FROM",
+      NULL } },
+    { "FREE SPINS", 0x7CFF6A, SY_STAR, -1, {
+      fs1,
+      "EXPANDING WILDS: A WILD 7 LANDING ON REEL 2, 3 OR 4 GROWS TO FILL ITS WHOLE REEL",
+      "AND NOTCHES THE MULTIPLIER UP ONE - IT NEVER FALLS BACK, AND CLIMBS TO X5",
+      "IT TIMES THE WHOLE SPIN, ON TOP OF THE X2 EVERY WILD ALREADY PAYS. SCATTERS PAY TOO" } },
+    { "LUCKY 7 PICK", 0xC060FF, SY_CROWN, -1, {
+      "3 CROWNS (THEY LAND ON REELS 1, 3 AND 5) OPEN A BOARD OF NINE HIDDEN PANELS",
+      "D-PAD MOVES THE CURSOR, A TURNS A PANEL.  PANELS HIDE CREDITS, A X2 MULTIPLIER, OR A STOP",
+      "THE ROUND ENDS ON THE THIRD STOP, SO YOU USUALLY GET FOUR OR FIVE PICKS",
+      "THE MULTIPLIER APPLIES TO EVERYTHING YOU COLLECTED" } },
+    { "PROGRESSIVE JACKPOTS", 0xFFB020, SY_JACKPOT, SY_ULT, {
+      "JACKPOT LANDS ON REELS 2, 3 AND 4.  5 TOUCHING = MINOR, 6 = MAJOR, 7 OR MORE = MEGA",
+      "ULTIMATE LANDS ONE PER REEL.  ALL FIVE TOUCHING = THE ULTIMATE, 100,000 TIMES YOUR BET",
+      "EVERY POT IS A MULTIPLE OF YOUR BET - 5X, 40X, 200X, 100,000X - PLUS EVERYTHING FED IN",
+      "HOLD & SPIN AND THE WHEEL CAN WIN THEM TOO.  A TENTH OF EVERY BET FEEDS THEM" } },
+  };
+  paint_ftpage("FEATURES",B);
+}
+
+static void paint_features2(void){
+  static const struct ftband B[4] = {
+    { "HOLD & SPIN", 0xFFD24A, SY_COIN, -1, {
+      "6 OR MORE LUCKY COINS ANYWHERE START IT.  THE COINS LOCK AND EVERY OTHER CELL RESPINS",
+      "3 RESPINS - EVERY NEW COIN LOCKS IN AND RESETS THEM TO 3.  IT ENDS WHEN THEY RUN OUT",
+      "EVERY COIN PAYS ITS VALUE.  A MINOR OR MAJOR COIN PAYS THAT JACKPOT",
+      "FILL ALL 25 CELLS FOR THE GRAND: THE MEGA JACKPOT ON TOP OF EVERY COIN" } },
+    { "WHEEL OF 7'S", 0xE070FF, SY_WHEEL, -1, {
+      "A WHEEL ON EACH OF REELS 2, 3 AND 4 BRINGS OUT THE WHEEL.  PRESS A TO SPIN IT",
+      "24 WEDGES: 5X TO 250X YOUR BET, THE MINOR AND MAJOR JACKPOTS - AND SUPER",
+      "SUPER UPGRADES TO THE SUPER WHEEL: 25X TO 500X, THE MAJOR, AND THE MEGA JACKPOT",
+      NULL } },
+    { "7 STRIKE", 0x9AD8FF, SY_SEVEN, -1, {
+      "AT RANDOM, A STORM GATHERS OVER THE REELS WHILE THEY SPIN",
+      "WHEN THEY STOP, 3 TO 8 LIGHTNING BOLTS STRIKE, AND EVERY CELL THEY HIT TURNS WILD",
+      "EVERY STRUCK WILD DOUBLES THE WINS THROUGH IT, LIKE ANY OTHER WILD 7",
+      NULL } },
+    { "GAMBLE", 0xFF6A6A, -1, -1, {
+      "AFTER A WIN, PRESS X TO GAMBLE IT.  LEFT = RED, RIGHT = BLACK: A RIGHT CALL DOUBLES IT",
+      "OR UP / DOWN TO CHOOSE A SUIT, AND X TO PLAY IT FOR FOUR TIMES.  A COLLECTS",
+      "UP TO 5 ROUNDS, ON WINS UP TO 50X YOUR BET.  THE CARDS ARE EXACTLY FAIR",
+      NULL } },
+  };
+  paint_ftpage("MORE FEATURES",B);
+}
+
+/*  All three pages are static between player actions, so each is
+ *  painted once into a cached frame and copied back after that.       */
+#define NPTPAGE 3
 static void draw_paytable(void){
-  int pg = G.ptPage&1;
-  cache_backdrop(&ptimg[pg], pg ? paint_features : paint_paytable);
-  if(((int)(G.t*2.0f))&1)
-    text(pg ? "SELECT = PAY TABLE          ANY OTHER BUTTON = BACK TO THE GAME"
-            : "SELECT = FEATURES AND JACKPOTS          ANY OTHER BUTTON = BACK TO THE GAME",
-         FBW/2,684,2,0xFFFFFF,1,1);
+  static void (*const paint[NPTPAGE])(void) = { paint_paytable, paint_features, paint_features2 };
+  int pg = G.ptPage%NPTPAGE;
+  if(pg<0) pg=0;
+  cache_backdrop(&ptimg[pg], paint[pg]);
+  if(((int)(G.t*2.0f))&1){
+    char b[96];
+    snprintf(b,sizeof b,"PAGE %d OF %d    SELECT = NEXT PAGE    ANY OTHER BUTTON = BACK TO THE GAME",
+             pg+1,NPTPAGE);
+    text(b,FBW/2,684,2,0xFFFFFF,1,1);
+  }
 }
 
 /* the jackpot celebration */
@@ -6254,7 +6287,7 @@ void retro_init(void){
 void retro_deinit(void){
   bp_shutdown();                          /* join the band workers first */
   fcache_free(&ptbg); fcache_free(&bnbg);
-  fcache_free(&ptimg[0]); fcache_free(&ptimg[1]);
+  fcache_free(&ptimg[0]); fcache_free(&ptimg[1]); fcache_free(&ptimg[2]);
   fcache_free(&bnimg);
   for(int i=0;i<TBC;i++){ free(tbc[i].fill); free(tbc[i].out);
                           tbc[i].fill=tbc[i].out=NULL; tbc[i].used=0; tbc[i].pins=0; }
