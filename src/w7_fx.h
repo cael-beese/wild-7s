@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_fx.h - cosmetic effects: particles, glows, rays, screen shake,
  *  title transitions, and the win presentation built from them.

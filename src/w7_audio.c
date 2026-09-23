@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_audio.c - the sound engine: a stereo software synth, a small
  *  music sequencer and every sound effect in the game.

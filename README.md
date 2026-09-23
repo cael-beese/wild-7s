@@ -153,7 +153,21 @@ WILD7_FORCE=wheel WILD7_AUTOPILOT=3 ./w7shot -n 1500 -s every:60 -o out
 | [docs/DESIGN.md](docs/DESIGN.md) | the design notes and the history of how the game got here |
 | [DEVELOPING.md](DEVELOPING.md) | the rules for changing it: frame budget and the render contract |
 
-`src/libretro.h` is the standard libretro API header from
-[libretro-common](https://github.com/libretro/libretro-common). WILD 7's is
-a game of chance played for free play credits on a home cabinet; there is
-no real money in it.
+WILD 7's is a game of chance played for free play credits on a home
+cabinet; there is no real money in it.
+
+## License
+
+**Source-available, free for noncommercial use.** WILD 7's is licensed
+under the [PolyForm Noncommercial License 1.0.0](LICENSE.md): you may use,
+study, modify and share it for personal, hobby, educational and other
+noncommercial purposes.
+
+**Any commercial use, in whole or in part, requires written permission**
+from the copyright holder - including selling it or anything built from
+it, or running it in a cabinet, product or service operated for profit. To
+ask, open an issue on this repository.
+
+`src/libretro.h`, the standard libretro API header from
+[libretro-common](https://github.com/libretro/libretro-common), is the
+RetroArch team's and keeps its own MIT license.

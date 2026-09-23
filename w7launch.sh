@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission)
 # Launch WILD 7's on the cabinet from SSH, then restore the normal
 # EmulationStation session by restarting tty1's autologin.
 #

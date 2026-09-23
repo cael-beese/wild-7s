@@ -1,4 +1,5 @@
 # =====================================================================
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md
 #  WILD 7's — libretro core.  Builds on the Pi 4 in about 3.5 minutes (one big -O3 unit).
 #    make            -> wild7_libretro.so
 #    make clean

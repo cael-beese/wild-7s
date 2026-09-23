@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission)
 # =====================================================================
 #  bandcheck.sh - prove the band renderer draws exactly what the
 #  single-threaded renderer draws, and optionally exactly what an older

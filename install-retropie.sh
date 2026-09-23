@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission)
 # =====================================================================
 #  Install WILD 7's into RetroPie as a Port.
 #  Run on the Pi, from this directory, after `make`.

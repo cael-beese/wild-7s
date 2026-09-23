@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7audio - bench and level checks for the WILD 7's sound engine.
  *

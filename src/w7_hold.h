@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_hold.h - HOLD & SPIN bonus (LUCKY COIN symbol).  Saved state and
  *  prototypes.  The struct is part of game_t, so it must stay flat: no

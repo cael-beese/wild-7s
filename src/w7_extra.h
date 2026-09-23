@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_extra.h - base-game extras: the 7 STRIKE wild storm (a random
  *  mystery feature) and the GAMBLE double-or-nothing.  Saved state and

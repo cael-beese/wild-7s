@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_wheel.h - WHEEL OF 7's (WHEEL symbol on reels 2, 3 and 4).
  *  Saved state and prototypes.  Flat struct, part of game_t as G.wheel,

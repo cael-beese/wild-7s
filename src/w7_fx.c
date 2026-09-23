@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  w7_fx.c - the effects system: particles, glows, god rays, screen
  *  shake, title slams, and the win presentation built from them (win

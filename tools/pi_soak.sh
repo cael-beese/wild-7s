@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission)
 # =====================================================================
 #  pi_soak.sh - soak the WILD 7's core on the Pi and watch the silicon.
 #

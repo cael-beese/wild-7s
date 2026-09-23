@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 - see LICENSE.md (commercial use by permission) */
 /* =====================================================================
  *  WILD 7's  —  video slots
  *  libretro core.  Software renderer, no dependencies beyond libm.
