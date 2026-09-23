@@ -52,7 +52,7 @@ static void bp_layout(int nb){
 static void bp_lock(void){}
 static void bp_unlock(void){}
 static int  bp_config(int want,int bands){ (void)want; (void)bands; return 1; }
-static void bp_shutdown(void){}
+static void bp_shutdown(void){ bp_layout(1); }
 static void bp_run(void(*fn)(int,int)){ fn(0,FBH); }
 #else
 

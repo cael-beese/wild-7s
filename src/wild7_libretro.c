@@ -417,24 +417,32 @@ static void cv_resolve(spr_t*s){
 
 /*  One pixel of the fb_blend rule: a<=0 leaves it, a>=255 stores c,
  *  otherwise each channel moves (c-d)*a/256 of the way, floored.      */
+/*
+ *  The blend is written  d + ((s-d)*a >> 8)  per channel throughout the
+ *  renderer.  Since d*256 + (s-d)*a == d*(256-a) + s*a and that is never
+ *  negative, it is exactly  (d*(256-a) + s*a) >> 8  - and in that form
+ *  red and blue ride together in one 32-bit multiply (each product fits
+ *  in its own 16 bits), so a pixel costs two multiplies instead of
+ *  three, with no unpacking.  Checked exhaustively for every d, s and
+ *  a in 0..256; the frames are bit-identical (tools/bandcheck.sh).    */
+static inline uint32_t blend_rbg(uint32_t d,uint32_t srb,uint32_t sg,uint32_t ia){
+  uint32_t rb=((d&0xFF00FFu)*ia + srb)>>8;
+  uint32_t g =((d&0x00FF00u)*ia + sg )>>8;
+  return (rb&0xFF00FFu)|(g&0x00FF00u);
+}
 static inline uint32_t blend_px(uint32_t d,uint32_t c,int a){
-  int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
-  int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
-  return RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
+  return blend_rbg(d,(c&0xFF00FFu)*(uint32_t)a,(c&0x00FF00u)*(uint32_t)a,256u-(uint32_t)a);
 }
 static inline void px_put(uint32_t*p,uint32_t c,int a){
   if(a<=0) return;
   *p = a>=255 ? c : blend_px(*p,c,a);
 }
-/*  The blend formula over a run, for any a in 1..255 (screen_tint uses
+/*  The blend formula over a run, for any a in 1..256 (screen_tint uses
  *  the formula even at 255; fb_blend stores instead - see span_put).  */
 static void span_blend(uint32_t*d,int n,uint32_t c,int a){
-  const int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
-  for(int i=0;i<n;i++){
-    uint32_t v=d[i];
-    int dr=(v>>16)&255, dg=(v>>8)&255, db=v&255;
-    d[i]=RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
-  }
+  const uint32_t srb=(c&0xFF00FFu)*(uint32_t)a, sg=(c&0x00FF00u)*(uint32_t)a;
+  const uint32_t ia=256u-(uint32_t)a;
+  for(int i=0;i<n;i++) d[i]=blend_rbg(d[i],srb,sg,ia);
 }
 static void span_fill(uint32_t*d,int n,uint32_t c){ for(int i=0;i<n;i++) d[i]=c; }
 /*  fb_blend over a run.                                               */
@@ -445,12 +453,10 @@ static inline void span_put(uint32_t*d,int n,uint32_t c,int a){
 /*  fb_blend of one colour through an 8-bit coverage mask.  a==0 leaves
  *  the pixel as it was either way, so there is no branch to skip it. */
 static void span_mask(uint32_t*d,const uint8_t*m,int n,uint32_t c){
-  const int sr=(c>>16)&255, sg=(c>>8)&255, sb=c&255;
+  const uint32_t crb=c&0xFF00FFu, cg=c&0x00FF00u;
   for(int i=0;i<n;i++){
-    int a=m[i];
-    uint32_t v=d[i];
-    int dr=(v>>16)&255, dg=(v>>8)&255, db=v&255;
-    uint32_t o=RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
+    uint32_t a=m[i];
+    uint32_t o=blend_rbg(d[i],crb*a,cg*a,256u-a);
     d[i] = a>=255 ? c : o;
   }
 }
@@ -626,11 +632,9 @@ static void blit(const spr_t*s,int dx,int dy,int cy0,int cy1,int alpha,uint32_t 
          to the pixel unchanged, alpha 255 stores the sprite colour */
       for(int x=xa;x<=xb;x++){
         const uint8_t*p=row+x*4;
-        int a=p[3], sr=p[0], sg=p[1], sb=p[2];
-        uint32_t d=dst[x];
-        int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
-        uint32_t o=RGB(dr+((sr-dr)*a>>8), dg+((sg-dg)*a>>8), db+((sb-db)*a>>8));
-        dst[x] = a==255 ? RGB(sr,sg,sb) : o;
+        uint32_t a=p[3], srb=((uint32_t)p[0]<<16)|p[2], sg=(uint32_t)p[1]<<8;
+        uint32_t o=blend_rbg(dst[x],srb*a,sg*a,256u-a);
+        dst[x] = a==255 ? (srb|sg) : o;
       }
       continue;
     }
@@ -671,8 +675,14 @@ static void blit_wash(const spr_t*s,int dx,int dy,int cy0,int cy1,
     if(xb<xa) continue;
     const uint8_t*row=s->px+(size_t)y*s->w*4;
     uint32_t*dst=fb+(size_t)fy*FBW+dx;
-    /* a<=0 blends to the pixel unchanged, so no branch is needed */
-    for(int x=xa;x<=xb;x++){
+    /* a==0 blends to the pixel unchanged, so no branch is needed */
+    if(k<=256){
+      const uint32_t crb=col&0xFF00FFu, cg=col&0x00FF00u;
+      for(int x=xa;x<=xb;x++){
+        uint32_t a=(uint32_t)(row[x*4+3]*k)>>8;           /* 0..255 */
+        dst[x]=blend_rbg(dst[x],crb*a,cg*a,256u-a);
+      }
+    } else for(int x=xa;x<=xb;x++){       /* amt > 1 overdrives: the plain form */
       int a=(row[x*4+3]*k)>>8;
       uint32_t d=dst[x];
       int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
@@ -992,10 +1002,8 @@ static void textb(const char*str,int x,int y,int px,
       const uint8_t*m=c->out+(size_t)j*bw;
       uint32_t*d=fb+(size_t)(by+so+j)*FBW+bx+so;
       for(int i=i0;i<i1;i++){
-        int a=m[i]*160/255;
-        uint32_t v=d[i];
-        int dr=(v>>16)&255, dg=(v>>8)&255, db=v&255;
-        d[i]=RGB(dr+((0-dr)*a>>8), dg+((0-dg)*a>>8), db+((0-db)*a>>8));
+        uint32_t a=(uint32_t)m[i]*160u/255u;             /* black, 0..160 */
+        d[i]=blend_rbg(d[i],0,0,256u-a);
       }
     }
   }
