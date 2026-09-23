@@ -17,7 +17,17 @@ from the core rather than forcing 4:3.
 WHEEL OF 7'S, the 7 STRIKE wild storm and a GAMBLE), BIG / SUPER / MEGA /
 EPIC win celebrations with 3-D coin showers, new art throughout, stereo
 sound with music, and a renderer that draws each frame on three of the
-Pi 4's four cores. `DEVELOPING.md` is the guide to working on it.
+Pi 4's four cores.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/GAME_GUIDE.md](docs/GAME_GUIDE.md) | the player's guide: controls, every feature, **every multiplier and when it goes up and down**, the jackpots, the odds |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | how the code works: state machine, reels and evaluation, modules, renderer, audio, the maths |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | running the cabinet: build, deploy, launch, soak, backups, rollback |
+| [DEVELOPING.md](DEVELOPING.md) | the rules for changing it: build commands, frame budget, the render contract |
+| this README | the design and the history of how the game got here |
 
 ## How it pays
 

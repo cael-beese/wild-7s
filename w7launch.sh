@@ -16,6 +16,12 @@ CFG=/opt/retropie/configs/ports/wild7/retroarch.cfg
 ROM=/home/pi/RetroPie/roms/ports/wild7/wild7.w7
 
 rm -f /tmp/es-restart
+# An earlier run of this script is still waiting on the game it started;
+# the moment that game is killed below it would restart tty1, and the
+# EmulationStation that brings up grabs the display from the new game.
+for p in $(pgrep -f w7launch.sh); do
+  [ "$p" != "$$" ] && kill "$p" 2>/dev/null
+done
 pkill -f "^$RA"                                   # a game already playing
 pkill -f "supplementary/emulationstation/emulationstation$"
 for i in $(seq 1 20); do
@@ -31,7 +37,10 @@ for attempt in 1 2 3 4; do
   RC=$?
   T1=$(date +%s)
   echo "retroarch exit $RC after $((T1-T0))s (attempt $attempt)" >> /tmp/ra.log
-  [ $((T1-T0)) -ge 3 ] && break          # it ran; the player quit it
+  # it ran and the player quit it: a clean exit, or a long run.  A failed
+  # mode switch exits 1 after about three seconds, which the old ">= 3"
+  # test took for a game that had run.
+  { [ $RC -eq 0 ] || [ $((T1-T0)) -ge 10 ]; } && break
   pkill -f "supplementary/emulationstation/emulationstation$"
   sleep 4                                 # lost the display: try again
 done
