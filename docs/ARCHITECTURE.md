@@ -259,7 +259,7 @@ the gamble pot and card history are all in there.
   `pickSeen[]`, `flipIdx`;
 - every cache and baked asset: the textb masks, the full-frame caches, the
   wheel frame cache, the baked backdrops (`bgBase`, `bgFree`, `hbk`,
-  `whStage`, `pkStage`, `tblImg`) and the SUPER wheel face, which is built
+  `whStage`, `pkStage`, `ptRoom`, `tblImg`) and the SUPER wheel face, which is built
   incrementally;
 - options (`opt_*`) and test hooks (`dbg_*`, `hold_dbg`, `fwStop`).
 
@@ -296,7 +296,7 @@ transition and many states key their timing off it.
 | `ST_GAMBLE` | `gamble_begin()` from SHOWWIN | `gamble_update()`; ends with `award(pot); feature_done()` | queue |
 | `ST_HOLD` | `hold_begin()` via queue | `hold_update()`; ends `award; feature_done()` | queue |
 | `ST_WHEEL` | `wheel_begin()` via queue | `wheel_update()`; ends `award; feature_done()` | queue |
-| `ST_BONUS` | `begin_bonus()` via queue | the pick board: D-pad/L/R move, A/START/B turns a panel; third STOP ends it | `ST_BONUSEND` (banner 4) |
+| `ST_BONUS` | `begin_bonus()` via queue | the pick board: the stick (and BET LESS / MORE) moves, SPIN (A/START, or B) turns a panel; third STOP ends it | `ST_BONUSEND` (banner 4) |
 | `ST_FSINTRO` | queue (`PEND_FS`) | 2.6 s title (press after 0.6 s). Fresh: `freeSpins += FS_AWARD; inFree=1; fsMult=1; fsWon=0`. Retrigger: `freeSpins += FS_RETRIG; after_result()` | `ST_IDLE` |
 | `ST_BONUSEND` | end of pick (banner 4), `end_free_spins()` (banner 3) | 2.4 s (press after 0.7 s). Pays the pick: `award(pickTotal * pickMult)` | banner 3: `ST_IDLE`/`ST_BROKE`; banner 4: `feature_done()` |
 | `ST_PAYTABLE` | IDLE + SELECT | three cached pages; SELECT flips page, any other press leaves (after 0.3 s) | `ST_IDLE` |
@@ -843,10 +843,16 @@ paint)`: if valid for `key`, copy this band's rows back; otherwise run
 `paint()` (which paints the whole frame through the primitives, so it only
 writes this band's rows), then store this band's rows. The cache is marked
 valid only in `render_commit()`, after all bands have run.
-`cache_backdrop(c, paint)` is `frame_cache` with key 0. In use: `ptimg[3]`
-(the three pay-table pages), `ptbg` (their shared background), `bnimg` (the
-pick board, keyed by `bonus_key()`: stops, picks, total, multiplier).
-`bnbg` is declared and freed but never used. Each is 1280x720x4 = 3.6 MB,
+`cache_backdrop(c, paint)` is `frame_cache` with key 0. In use: `ptimg[4]`
+(the four pay-table pages; the fourth, CONTROLS, caches only its backdrop
+and `wp_controls_draw()` draws the panel live over it) and `bnimg` (the
+pick board, keyed by `bonus_key()`: stops, picks, total, multiplier). The
+pages and the pick board stand in the lounge's honeycomb room, `ptRoom`,
+which `build_pick_assets()` bakes once (`lz_paint_room()` paints a whole
+frame, so it cannot run per band); the pick stage `pkStage` is baked from
+it. A cached page's glass panels are drawn by `pt_glass()`, lz_glass's
+look worked out for the band's rows only (lz_glass rasterises its whole
+canvas on every call, once per band). Each is 1280x720x4 = 3.6 MB,
 allocated on first use; `NFCPEND` (16) caches may be filled in one frame.
 
 ### Draw order - draw_frame()
@@ -1348,8 +1354,8 @@ day.
   cache and re-rasterises under the lock. Strings of 40+ characters are
   silently not drawn.
 - **Full-frame buffers are 3.6 MB each**: `fb`, `bg`, `bgBase`, `bgFree`,
-  `whStage`, `pkStage` (plus a transient copy while `build_pick_assets`
-  runs) and up to five frame caches (`ptbg`, `ptimg[0..2]`, `bnimg`) that
+  `whStage`, `pkStage`, `ptRoom` (plus a transient copy while `build_pick_assets`
+  runs) and up to five frame caches (`ptimg[0..3]`, `bnimg`) that
   are allocated on first use and kept - about 40 MB of the whole. Measured
   peak RSS of `w7shot` on x86: 75 MB (spin loop) to 88 MB (pick bonus),
   before RetroArch's own footprint. The Pi has 905 MB in total and about

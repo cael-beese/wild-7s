@@ -283,9 +283,9 @@ static void wp_learn_draw(void){
   }
 }
 
-/* The CONTROLS page (the pay table's fourth page), over the dimmed game. */
+/* The CONTROLS page (the pay table's fourth page), over the pay table's
+ * backdrop (draw_paytable paints the room and a glass panel first). */
 static void wp_controls_draw(float t){
-  dim(225);
   lz_neon(LZF_NEON_L, "CONTROLS", FBW / 2, 52, 56, LZ_CYAN, 1.0f, 0.9f);
   lz_text_sh(LZF_UI_M, "EVERYTHING IS ON PLAYER 1'S SIDE OF THE PANEL - PRESS A BUTTON AND IT LIGHTS UP HERE",
              FBW / 2, 88, 22, 0xE6DCEE, LZ_CENTER);
