@@ -3,7 +3,9 @@
  *  w7_wheel.c - WHEEL OF 7's, the showpiece bonus.
  *
  *  Three WHEEL symbols, one on each of reels 2, 3 and 4, bring up a
- *  600-pixel wheel on its own spotlit stage: 24 glossy wedges, gold
+ *  600-pixel wheel in the lounge's honeycomb room, between its glass
+ *  and neon panels (pots, how it plays, bet, win, the status and the
+ *  prize plate, all in the w7_lounge.c kit): 24 glossy wedges, gold
  *  dividers and pegs, a chrome and gold rim ringed with chasing bulbs,
  *  and a gold flapper at the top that the pegs knock aside one by one.
  *
@@ -49,6 +51,35 @@
 #define WH_PIVY   54                  /* pointer pivot, screen y         */
 #define WH_GW     (WH_RF*2+3)         /* lighting map, square            */
 
+/* ---- the lounge furniture either side: shared by the stage and the draw ---- */
+#define WPL_X     18                  /* left column: title, pots, how it plays */
+#define WPR_X     962                 /* right column: bet, win, wheels, status */
+#define WCOL_W    300
+#define WCX_L     (WPL_X+WCOL_W/2)
+#define WCX_R     (WPR_X+WCOL_W/2)
+#define WT_Y      18                  /* the title sign                  */
+#define WT_H      142
+#define WJ_Y      180                 /* JACKPOT WEDGES                  */
+#define WJ_H      252
+#define WJ_ROW(i) (WJ_Y+28+(i)*74)    /* a pot's caption; its well 22 below */
+#define WHP_Y     452                 /* HOW IT PLAYS                    */
+#define WHP_H     (FBH-18-WHP_Y)
+#define WB_Y      18                  /* BET                             */
+#define WB_H      96
+#define WW_Y      132                 /* WHEEL WIN                       */
+#define WW_H      112
+#define WTAB_X    986                 /* the two wheels, the live one lit */
+#define WTAB_W    252
+#define WTAB_H    44
+#define WTAB_Y(i) (266+(i)*58)
+#define WTAB_M    30                  /* how far a lit tab's glow spills */
+#define WS_Y      394                 /* the status: prompts and results */
+#define WS_H      (FBH-18-WS_Y)
+#define WPLATE_W  560                 /* the prize plate over the wheel  */
+#define WPLATE_H  164
+#define WPLATE_Y  478
+#define WPLATE_M  26                  /* its glass sprite's glow margin  */
+
 /* ---- the spin ---- */
 #define WH_WIND    7.0f               /* wind-up, degrees backwards      */
 #define WH_WINDT   0.45f
@@ -59,15 +90,17 @@ enum { WPH_INTRO, WPH_READY, WPH_WIND, WPH_SPIN, WPH_LANDED,
        WPH_UPGRADE, WPH_PRIZE, WPH_DONE };
 enum { WK_CR=0, WK_POT, WK_UP };
 
-/* ---- wedge palettes: lo / mid / hi ---- */
+/* ---- wedge palettes: lo / mid / hi ----
+ *  The lounge's jewel tones: ruby, indigo, green, plum, amber, cyan and
+ *  magenta, so the wheel sits in the room's palette rather than beside it. */
 enum { WP_RED, WP_BLUE, WP_GREEN, WP_PURPLE, WP_ORANGE, WP_TEAL, WP_MAGENTA,
        WP_CRIMSON, WP_ONYX, WP_WINE, WP_NAVY, WP_EMERALD,
        WP_MINOR, WP_MAJOR, WP_MEGA, WP_SUPER, WP_N };
 static const uint32_t WH_PAL[WP_N][3] = {
-  {0x3A0006,0xC8142A,0xFF8A7A}, {0x040E40,0x1A50D8,0x9AC4FF},
-  {0x022E10,0x14A044,0xA8F4A8}, {0x220640,0x7A28C8,0xDAA8FF},
-  {0x401402,0xF07C12,0xFFD8A0}, {0x02323A,0x0AA8B8,0xA0F6FF},
-  {0x40061E,0xD4207C,0xFFA8D8}, {0x200002,0x8A000E,0xE02A3A},
+  {0x3A0012,0xD01A48,0xFF8AA0}, {0x0A0A40,0x3242D0,0xA8B6FF},
+  {0x022A14,0x16A052,0xA8F4B8}, {0x24082E,0x8A2AB8,0xE0A8FF},
+  {0x401802,0xFF8010,0xFFD89A}, {0x02303A,0x10B4D0,0xA0F2FF},
+  {0x40062E,0xE0229C,0xFFA8E0}, {0x200006,0x8A0A24,0xE02A4A},
   {0x020204,0x18181F,0x585866}, {0x160006,0x5A0A24,0xB0405E},
   {0x02041A,0x0C1C64,0x4068C8}, {0x011A0C,0x0A5A30,0x40AE74},
   {0x283040,0xB8C4DA,0xFFFFFF}, {0x4A2E04,0xE8A820,0xFFF4C0},
@@ -159,6 +192,14 @@ static spr_t whHub, whPtr, whKnob, whPeg, whBulb;
 static uint8_t whHalo[WH_HALO*WH_HALO];
 static int whBuilt;
 static float whPtrPX;                 /* flapper pivot x in its sprite   */
+/* A lit wheel tab as it looks on the stage, glow and all: the rectangle
+   [WTAB_X-WTAB_M, +WTAB_W+2*WTAB_M) clipped to the screen, rows from
+   WTAB_Y(i)-WTAB_M.  Copied over the stage for the live wheel.        */
+#define WTAB_X0 (WTAB_X-WTAB_M)
+#define WTAB_X1 ((WTAB_X+WTAB_W+WTAB_M)<FBW?(WTAB_X+WTAB_W+WTAB_M):FBW)
+#define WTAB_RH (WTAB_H+2*WTAB_M)
+static uint32_t *whTabLit[2];
+static spr_t whPlate[3];              /* prize plate glass: honey, cyan, magenta */
 
 /* trim a sprite's empty columns; returns how many came off the left */
 static int wh_crop_x(spr_t*s){
@@ -594,48 +635,71 @@ static uint32_t wh_tube(float dx,float dy,float r,float r0,float r1,const uint32
   return mixc(c,0xFFFFFF,sp*0.85f);
 }
 
+/* the size at which s fits in maxw px (text scales linearly with size) */
+static float wh_fit(int f,const char*s,float size,float maxw){
+  float w=lz_width(f,s,size,0);
+  return w>maxw?size*maxw/w:size;
+}
+
+/* The lounge's glass panel (lz_glass) as a sprite, the glass at (m, m)
+   with m = WPLATE_M: for a panel that comes and goes over live art.    */
+static void wh_bake_glass(spr_t*out,int w,int h,uint32_t neon,float glow_k){
+  const int m=WPLATE_M;
+  LCanvas cv;
+  memset(out,0,sizeof *out);
+  if(!lz_cv_new(&cv,w+2*m,h+2*m)) return;
+  float hw=w*0.5f, hh=h*0.5f, cx=m+hw, cy=m+hh;
+  LShape box[1]={ { LSH_RBOX, LOP_UNION, { cx, cy, hw, hh, 18 }, NULL, 0 } };
+  LFillOpt g={0};
+  g.outline=2; g.glow=10; g.opacity=clampf(0.8f*glow_k,0,1); g.blend=LBL_ADD;
+  LPaint np=lpaint_solid(lz_col(neon,1));
+  lcv_fill(&cv,NULL,box,1,&np,&g);
+  LPaint fill=lpaint_linear(lz_col(0x1E1624,0.90f),0,cy-hh,lz_col(0x0C080F,0.94f),0,cy+hh);
+  lcv_fill(&cv,NULL,box,1,&fill,NULL);
+  LShape shn[1]={ { LSH_RBOX, LOP_UNION, { cx, cy-hh*0.62f, hw-8, hh*0.30f, 12 }, NULL, 0 } };
+  LPaint sp=lpaint_linear(lrc(1,1,1,0.08f),0,cy-hh,lrc(1,1,1,0.0f),0,cy-hh*0.3f);
+  lcv_fill(&cv,NULL,shn,1,&sp,NULL);
+  LFillOpt ol={0};
+  ol.outline=3;
+  LPaint tube=lpaint_solid(lz_col(lz_hot(neon,0.3f),1));
+  lcv_fill(&cv,NULL,box,1,&tube,&ol);
+  lz_cv_to_spr(&cv,out);
+}
+
+/* the two wheel tabs: their neon, and their caption, dim or lit */
+static const uint32_t WTAB_NEON[2]={LZ_HONEY,LZ_MAGENTA};
+static void wh_tab_label(int i,int lit){
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=lit?0xFFFAF0:0x7A6C80; st.align=LZ_CENTER;
+  st.shadow=0x000000; st.shadow_k=0.85f;
+  lz_text_ex(LZF_DISP_S,i?"SUPER WHEEL":"WHEEL OF 7'S",(float)WCX_R,(float)(WTAB_Y(i)+(lit?2:0)+10),21.0f,&st);
+}
+
 static void wh_build_stage(void){
-  /* 1. the room: deep violet, a warm bloom behind the wheel, a sunburst
-        of light fanning out from it and two spotlights from the flies */
-  for(int y=0;y<FBH;y++){
-    uint32_t base=mixc(0x220838,0x040008,(float)y/(FBH-1));
-    for(int x=0;x<FBW;x++){
-      float dx=(float)(x-WH_CX), dy=(float)(y-WH_CY);
-      float d2=dx*dx+dy*dy;
-      /* the side panels and the wheel hide nearly all of this: only the
-         strips between them get the full treatment                   */
-      int inPanel=(y>=24 && y<FBH-24) && ((x>=24 && x<312)||(x>=968 && x<1256));
-      if(inPanel || d2<(WH_RRIM-2)*(WH_RRIM-2)){ fb_px(x,y,base); continue; }
-      float d=sqrtf(d2);
-      float bloom=powf(clampf(1.0f-d/620.0f,0,1),2.0f);
-      float ang=atan2f(dx,-dy);
-      float ray=0.5f+0.5f*cosf(ang*16.0f);
-      ray=ray*ray*ray*clampf((d-300.0f)/60.0f,0,1)*clampf(1.0f-(d-300.0f)/520.0f,0,1);
-      int rr=((base>>16)&255)+(int)(bloom*120+ray*70);
-      int gg=((base>>8)&255)+(int)(bloom*40+ray*38);
-      int bb=(base&255)+(int)(bloom*90+ray*20);
-      /* spotlights, from above either side, crossing on the wheel */
-      for(int s=0;s<2;s++){
-        float sx=s?1180.0f:100.0f, sy=-80.0f;
-        float ax=WH_CX-sx, ay=WH_CY-sy, al=sqrtf(ax*ax+ay*ay);
-        float px=x-sx, py=y-sy, pl=sqrtf(px*px+py*py)+0.001f;
-        float cosb=(px*ax+py*ay)/(pl*al);
-        float cone=wh_smooth(0.955f,0.992f,cosb)*clampf(1.0f-pl/1100.0f,0,1);
-        rr+=(int)(cone*46); gg+=(int)(cone*38); bb+=(int)(cone*52);
-      }
-      float vx=(x-FBW*0.5f)/(FBW*0.5f), vy=(y-FBH*0.5f)/(FBH*0.5f);
-      float vig=1.0f-clampf((vx*vx+vy*vy)*0.30f,0,0.6f);
-      fb_px(x,y,RGB(clampi((int)(rr*vig),0,255),clampi((int)(gg*vig),0,255),clampi((int)(bb*vig),0,255)));
+  /* 1. the room: the lounge's honeycomb, with a warm bloom behind the
+        wheel, faint honey rays fanning out from it and two soft spots
+        from the flies.  Only the strip between the panels is worked;
+        the panels' dark glass covers the rest.                        */
+  lz_paint_room(fb,0);
+  for(int y=0;y<FBH;y++) for(int x=WPL_X+WCOL_W-20;x<WPR_X+20;x++){
+    float dx=(float)(x-WH_CX), dy=(float)(y-WH_CY);
+    float d2=dx*dx+dy*dy;
+    if(d2<(WH_RRIM-2)*(WH_RRIM-2)) continue;
+    float d=sqrtf(d2);
+    float bloom=powf(clampf(1.0f-d/600.0f,0,1),2.0f);
+    float ang=atan2f(dx,-dy);
+    float ray=0.5f+0.5f*cosf(ang*16.0f);
+    ray=ray*ray*ray*clampf((d-300.0f)/60.0f,0,1)*clampf(1.0f-(d-300.0f)/480.0f,0,1);
+    float rr=bloom*96+ray*54, gg=bloom*44+ray*34, bb=bloom*40+ray*10;
+    for(int s=0;s<2;s++){
+      float sx=s?1180.0f:100.0f, sy=-80.0f;
+      float ax=WH_CX-sx, ay=WH_CY-sy, al=sqrtf(ax*ax+ay*ay);
+      float px=x-sx, py=y-sy, pl=sqrtf(px*px+py*py)+0.001f;
+      float cosb=(px*ax+py*ay)/(pl*al);
+      float cone=wh_smooth(0.955f,0.992f,cosb)*clampf(1.0f-pl/1100.0f,0,1);
+      rr+=cone*40; gg+=cone*30; bb+=cone*26;
     }
-  }
-  /* a starfield of tiny glints in the dark */
-  for(int i=0;i<160;i++){
-    uint32_t h=wh_hash(0x5A17u+i*977u);
-    int x=(int)(h%FBW), y=(int)((h>>12)%FBH);
-    int a=40+(int)((h>>24)&127);
-    fb_blend(x,y,0xFFFFFF,a);
-    if(((h>>8)&7)==0){ fb_blend(x-1,y,0xFFE0C0,a/3); fb_blend(x+1,y,0xFFE0C0,a/3);
-                       fb_blend(x,y-1,0xFFE0C0,a/3); fb_blend(x,y+1,0xFFE0C0,a/3); }
+    fb_add(x,y,(int)rr,(int)gg,(int)bb);
   }
 
   /* 2. pedestal under the wheel, and the wheel's own shadow */
@@ -708,45 +772,66 @@ static void wh_build_stage(void){
     fb_rframe(x0+5,y0+5,w-10,68,19,1.2f,0xFFF4C8,200);
   }
 
-  /* 5. side panels */
-  for(int s=0;s<2;s++){
-    int x0=s?962:18, y0=18, w=300, h=FBH-36;
-    fb_rrect(x0-4,y0-4,w+8,h+8,20,0x000000,200);
-    fb_rrectg(x0,y0,w,h,18,0x2C0E46,0x0A0316,245);
-    fb_rframe(x0,y0,w,h,18,3.0f,0xF0C24A,255);
-    fb_rframe(x0+6,y0+6,w-12,h-12,13,1.0f,0x8A5A10,220);
-  }
-  /* left: the title, the three pots, how it plays */
-  textb("WHEEL",168,42,8,GOLDG,5,1);
-  textb("OF 7's",168,114,7,GOLDG,5,1);
-  text("JACKPOT WEDGES",168,194,2,0xFFD98A,1,1);
+  /* 5. the lounge's furniture either side: dark glass with neon edges,
+        spaced captions, and dark wells for the readouts drawn live.
+        Left: the title sign, the three pots, how it plays.            */
+  lz_glass(WPL_X,WT_Y,WCOL_W,WT_H,LZ_HONEY,0.55f,1.0f);
   {
-    static const char*PN[3]={"MEGA  -  SUPER WHEEL","MAJOR","MINOR"};
+    float s=wh_fit(LZF_DISP_L,"WHEEL",84.0f,WCOL_W-48);
+    lz_gold(LZF_DISP_L,"WHEEL",WCX_L,WT_Y+52,s,1.0f,0.7f);
+    lz_neon(LZF_NEON_L,"OF 7'S",WCX_L,WT_Y+110,50,LZ_MAGENTA,1.0f,0.9f);
+  }
+  lz_glass(WPL_X,WJ_Y,WCOL_W,WJ_H,LZ_MAGENTA,0.55f,1.0f);
+  rail_label(WPL_X,WJ_Y,WCOL_W,"JACKPOT WEDGES",lz_hot(LZ_MAGENTA,0.35f));
+  {
+    /* each pot, and which wheel carries its wedge */
+    static const char*PN[3]={"MEGA","MAJOR","MINOR"};
+    static const char*PW[3]={"SUPER WHEEL","BOTH WHEELS","WHEEL OF 7'S"};
+    static const uint32_t PC[3]={LZ_MAGENTA,LZ_AMBER,LZ_CYAN};
     for(int i=0;i<3;i++){
-      int y=218+i*78;
-      led_window(30,y,276,44);
-      text(PN[i],168,y+50,2,i==0?0xFFB0F0:(i==1?0xFFE08A:0xC8DCFF),1,1);
+      int y=WJ_ROW(i);
+      lz_text_sh(LZF_UI_M,PN[i],WPL_X+16,(float)y-3,24,lz_hot(PC[i],0.35f),LZ_LEFT);
+      lz_text_sh(LZF_UI_S,PW[i],WPL_X+WCOL_W-16,(float)y+1,18,LZ_DIM,LZ_RIGHT);
+      led_window(WPL_X+12,y+22,WCOL_W-24,44);
     }
   }
-  text("HOW IT PLAYS",168,468,2,0xFFD98A,1,1);
+  lz_glass(WPL_X,WHP_Y,WCOL_W,WHP_H,LZ_CYAN,0.55f,1.0f);
+  rail_label(WPL_X,WHP_Y,WCOL_W,"HOW IT PLAYS",lz_hot(LZ_CYAN,0.35f));
   {
     static const char*HW[6]={"WEDGES PAY X YOUR BET","POT WEDGES PAY THE POT","LAND SUPER TO UPGRADE",
                              "TO THE SUPER WHEEL:","BIGGER WEDGES AND","THE MEGA JACKPOT"};
-    for(int i=0;i<6;i++) text(HW[i],168,496+i*28,2,i==3?0xFFB0F0:0xC8D2F0,1,1);
+    for(int i=0;i<6;i++)
+      lz_text_sh(LZF_UI_M,HW[i],WCX_L,(float)(WHP_Y+34+i*34),25,
+                 i==2?LZ_GOLD:(i==3?lz_hot(LZ_MAGENTA,0.45f):LZ_IVORY),LZ_CENTER);
   }
-  /* right: bet, win, which wheel is live */
-  text("BET",1112,34,2,0xFFD98A,1,1);
-  led_window(976,54,272,48);
-  text("WHEEL WIN",1112,120,2,0xFFD98A,1,1);
-  led_window(976,140,272,60);
+  /* right: bet, win, which wheel is live, and the status panel */
+  lz_glass(WPR_X,WB_Y,WCOL_W,WB_H,LZ_AMBER,0.55f,1.0f);
+  rail_label(WPR_X,WB_Y,WCOL_W,"BET",lz_hot(LZ_AMBER,0.35f));
+  led_window(WPR_X+14,WB_Y+24,WCOL_W-28,60);
+  lz_glass(WPR_X,WW_Y,WCOL_W,WW_H,LZ_MAGENTA,0.55f,1.0f);
+  rail_label(WPR_X,WW_Y,WCOL_W,"WHEEL WIN",lz_hot(LZ_MAGENTA,0.35f));
+  led_window(WPR_X+14,WW_Y+24,WCOL_W-28,76);
   for(int i=0;i<2;i++){
-    int y=232+i*56;
-    fb_rrect(986,y,252,44,12,0x000000,200);
-    fb_rframe(986,y,252,44,12,1.5f,0x5A4A70,255);
-    text(i?"SUPER WHEEL":"WHEEL OF 7's",1112,y+14,2,0x6A5A80,1,0);
+    lz_button(WTAB_X,WTAB_Y(i),WTAB_W,WTAB_H,WTAB_NEON[i],0);
+    wh_tab_label(i,0);
   }
+  lz_glass(WPR_X,WS_Y,WCOL_W,WS_H,LZ_CYAN,0.45f,1.0f);
 
   memcpy(whStage,fb,sizeof fb);
+
+  /* The live wheel's tab, lit, glow and all, as it looks over this stage:
+     painted, kept aside, and the stage put back.                        */
+  for(int i=0;i<2;i++){
+    const int w=WTAB_X1-WTAB_X0, y0=WTAB_Y(i)-WTAB_M;
+    whTabLit[i]=(uint32_t*)malloc((size_t)w*WTAB_RH*4);
+    if(!whTabLit[i]) continue;
+    lz_button(WTAB_X,WTAB_Y(i),WTAB_W,WTAB_H,WTAB_NEON[i],1);
+    wh_tab_label(i,1);
+    for(int j=0;j<WTAB_RH;j++){
+      memcpy(whTabLit[i]+(size_t)j*w,fb+(size_t)(y0+j)*FBW+WTAB_X0,(size_t)w*4);
+      memcpy(fb+(size_t)(y0+j)*FBW+WTAB_X0,whStage+(size_t)(y0+j)*FBW+WTAB_X0,(size_t)w*4);
+    }
+  }
 }
 
 /* the hub, pointer, knob, peg and bulb sprites, on the shared canvas */
@@ -924,6 +1009,9 @@ static void wh_build(void){
   wh_build_gloss();
   wh_build_rays();
   if(whStage) wh_build_stage();
+  wh_bake_glass(&whPlate[0],WPLATE_W,WPLATE_H,LZ_HONEY,1.0f);
+  wh_bake_glass(&whPlate[1],WPLATE_W,WPLATE_H,LZ_CYAN,1.0f);
+  wh_bake_glass(&whPlate[2],WPLATE_W,WPLATE_H,LZ_MAGENTA,1.0f);
 }
 
 /* The reel symbol: a little lit wheel on a violet medallion. */
@@ -1427,7 +1515,7 @@ static void wh_bulbs(void){
     float a=(k+0.5f)*TAU/WH_NBULB;
     int bx=(int)lrintf(WH_CX+sinf(a)*WH_RBULB), by=(int)lrintf(WH_CY-cosf(a)*WH_RBULB);
     uint32_t col = W->face ? wh_hsv(k/(float)WH_NBULB+W->anim*0.05f,0.65f,1.0f)
-                           : ((k&1)?0xFFD040:0xFF5038);
+                           : ((k&1)?0xFFC848:0xFF48B8);      /* honey and magenta */
     blit(&whBulb,bx-10,by-10,clip_y0,clip_y1,(int)(v*255),col,0.35f);
     int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255, vi=(int)(v*0.6f*256.0f);
     for(int j=0;j<WH_HALO;j++){
@@ -1441,6 +1529,29 @@ static void wh_bulbs(void){
   }
 }
 
+/* a caption in small spaced capitals, centred on cx, top at y */
+static void wh_spaced(const char*s,float cx,int y,uint32_t col){
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=col; st.align=LZ_CENTER; st.spacing=2.0f;
+  st.shadow=0x000000; st.shadow_k=0.8f;
+  lz_text_ex(LZF_UI_S,s,cx,(float)y,16.0f,&st);
+}
+/* a gold readout centred on cx, caps' top at y and h tall (lz_readout's
+   look, which only right-aligns) */
+static void wh_count(long long v,float cx,int y,float h,uint32_t col){
+  char s[32];
+  commas(s,sizeof s,v<0?0:v);
+  int f=lz_disp_font(h);
+  const lz_font*F=&lzf[f];
+  float size=h/F->capH*F->base, k=size/F->base;
+  lz_style st; memset(&st,0,sizeof st);
+  st.align=LZ_CENTER;
+  st.color=mixc(col,0xFFFFFF,0.55f); st.color2=col; st.grad=1;
+  st.glow=col; st.glow_k=0.35f;
+  st.outline=0x000000; st.outline_px=size*0.035f;
+  lz_text_ex(f,s,cx,y-F->capTop*k,size,&st);
+}
+
 static void wheel_draw(void){
   const wheel_state_t*W=&G.wheel;
   char b[64];
@@ -1448,6 +1559,17 @@ static void wheel_draw(void){
   if(whStage){
     int y0=clip_y0<0?0:clip_y0, y1=clip_y1>FBH?FBH:clip_y1;
     if(y1>y0) memcpy(fb+(size_t)y0*FBW,whStage+(size_t)y0*FBW,(size_t)(y1-y0)*FBW*4);
+  }
+  /* the live wheel's tab, lit: its copy from init goes over the stage's
+     unlit one, and a breathing rim over that */
+  if(whTabLit[W->face]){
+    const int w=WTAB_X1-WTAB_X0, ty=WTAB_Y(W->face)-WTAB_M;
+    int y0=ty>clip_y0?ty:clip_y0, y1=ty+WTAB_RH<clip_y1?ty+WTAB_RH:clip_y1;
+    for(int y=y0;y<y1;y++)
+      memcpy(fb+(size_t)y*FBW+WTAB_X0,whTabLit[W->face]+(size_t)(y-ty)*w,(size_t)w*4);
+    float pl=0.5f+0.5f*sinf(W->anim*4.0f);
+    fb_rframe(WTAB_X-3,WTAB_Y(W->face)-1,WTAB_W+6,WTAB_H+6,16,2.0f,
+              lz_hot(WTAB_NEON[W->face],0.5f),(int)(pl*120));
   }
   wh_disc();
   /* big prizes and every pot get rays fanning out behind the wheel (the
@@ -1491,77 +1613,82 @@ static void wheel_draw(void){
   }
   blit(&whKnob,WH_CX-16,WH_PIVY-16,clip_y0,clip_y1,255,0,0.0f);
 
-  /* left panel: live pots */
+  /* left panel: the live pots, in gold; the one being paid flashes */
   for(int i=0;i<3;i++){
-    int tier=JP_MEGA+i, y=218+i*78;
+    int tier=JP_MEGA+i, y=WJ_ROW(i)+22;
     int hot=(W->phase>=WPH_PRIZE && W->potTier==tier);
-    uint32_t on=tier==JP_MEGA?0xFF70D8:(tier==JP_MAJOR?0xFFB020:0x8AD0FF);
+    uint32_t on=LZ_GOLD;
     if(hot){ float pl=0.5f+0.5f*sinf(W->anim*12.0f); on=mixc(on,0xFFFFFF,pl*0.6f); }
     long long v=hot?W->prize:jp_value(tier);
-    seg_num(v,296,y+9,11,11,26,on,0x3A1A30,1);
+    seg_num(v,WPL_X+WCOL_W-24,y+9,11,11,26,on,0,1);
   }
-  /* right panel: bet, win, which wheel */
-  seg_num(TOTBET,1236,63,8,14,30,0xFF3A2A,0x5A1008,1);
+  /* right panel: bet and win */
+  seg_num(TOTBET,WPR_X+WCOL_W-28,WB_Y+39,8,14,30,LZ_GOLD,0,1);
   {
     long long w=W->phase>=WPH_PRIZE?W->shown:0;
-    uint32_t wc=w>0?mixc(0xFFB020,0xFFF0A0,0.5f+0.5f*sinf(W->anim*9.0f)):0x6A4A10;
-    seg_num(w,1236,150,10,15,40,wc,0x4A3406,1);
+    uint32_t wc=w>0?mixc(LZ_GOLD,0xFFF6D0,0.5f+0.5f*sinf(W->anim*9.0f)):0x6A4A10;
+    seg_num(w,WPR_X+WCOL_W-28,WW_Y+41,10,15,42,wc,0,1);
   }
-  for(int i=0;i<2;i++){
-    if(W->face!=i) continue;
-    int y=232+i*56;
-    float pl=0.6f+0.4f*sinf(W->anim*4.0f);
-    fb_rrectg(988,y+2,248,40,11,i?0x6A1A60:0x6A4A0A,i?0x2A0626:0x2A1A02,255);
-    fb_rframe(986,y,252,44,12,2.0f,mixc(i?0xFF8AC8:0xFFD24A,0xFFFFFF,pl*0.4f),255);
-    text(i?"SUPER WHEEL":"WHEEL OF 7's",1112,y+14,2,i?0xFFD0F0:0xFFF0B0,1,1);
-  }
-  /* status */
+  /* the status panel: what the wheel wants, or what it gave */
+  const float cy=(float)WS_Y;
+  int blink=((int)(W->anim*2.5f))&1;
   switch(W->phase){
-  case WPH_READY:
-    if(((int)(W->anim*2.5f))&1){
-      textb("PRESS A",1112,370,5,GREENG,4,1);
-      textb("TO SPIN",1112,430,5,GREENG,4,1);
-    }
-    { float lim=W->face?3.5f:6.0f, k=clampf(1.0f-W->t/lim,0,1);
-      fb_rrect(992,500,240,10,5,0x000000,200);
-      fb_rrect(992,500,(int)(240*k),10,5,0x7CFF6A,220);
-      text("AUTO SPIN",1112,518,1,0x9AB0A0,1,1); }
-    break;
+  case WPH_READY: {
+    /* the panel icon with the SPIN buttons lit, and a neon PRESS SPIN
+       that dims to cold glass on the off beat rather than vanishing */
+    const float ih=30.0f;
+    lz_icon(WCX_R-lz_icon_w(ih)*0.5f,cy+34,ih,wp_mask(B_A|B_START),LZ_GOLD,255);
+    lz_neon(LZF_NEON_L,"PRESS SPIN",WCX_R,cy+110,wh_fit(LZF_NEON_L,"PRESS SPIN",50,WCOL_W-36),
+            LZ_GREEN,blink?1.0f:0.3f,0.9f);
+    lz_text_sh(LZF_UI_M,"TO SPIN THE WHEEL",WCX_R,cy+140,24,LZ_IVORY,LZ_CENTER);
+    float lim=W->face?3.5f:6.0f, k=clampf(1.0f-W->t/lim,0,1);
+    int by=(int)cy+196;
+    fb_rrect(WCX_R-120,by,240,10,5,0x000000,200);
+    fb_rrect(WCX_R-120,by,(int)(240*k),10,5,LZ_GREEN,220);
+    wh_spaced("AUTO SPIN",WCX_R,by+16,LZ_DIM);
+    break; }
   case WPH_WIND: case WPH_SPIN:
-    text("GOOD LUCK!",1112,400,3,mixc(0xFFD24A,0xFFFFFF,0.5f+0.5f*sinf(W->anim*6.0f)),1,1);
+    lz_neon(LZF_NEON_L,"GOOD LUCK!",WCX_R,cy+120,wh_fit(LZF_NEON_L,"GOOD LUCK!",50,WCOL_W-36),
+            LZ_HONEY,0.75f+0.25f*sinf(W->anim*6.0f),0.9f);
     break;
   case WPH_UPGRADE:
-    text("SUPER WHEEL!",1112,400,3,mixc(0xFF8AC8,0xFFFFFF,0.5f+0.5f*sinf(W->anim*8.0f)),1,1);
+    lz_neon(LZF_NEON_L,"SUPER WHEEL!",WCX_R,cy+120,wh_fit(LZF_NEON_L,"SUPER WHEEL!",50,WCOL_W-36),
+            LZ_MAGENTA,0.7f+0.3f*sinf(W->anim*8.0f),1.0f);
     break;
   case WPH_LANDED: case WPH_PRIZE: case WPH_DONE:
     if(W->landed>=0){
       wh_label(W->face,W->landed,b,sizeof b);
-      text(b,1112,400,3,0xFFFFFF,1,1);
+      wh_spaced("THE WHEEL LANDS ON",WCX_R,(int)cy+46,LZ_DIM);
+      lz_gold(LZF_DISP_M,b,WCX_R,cy+100,wh_fit(LZF_DISP_M,b,40,WCOL_W-40),1.0f,0.6f);
     }
-    if(W->phase==WPH_PRIZE && W->prize>0 && W->shown>=W->prize && (((int)(W->anim*2.5f))&1))
-      text("PRESS A TO COLLECT",1112,460,2,0x7CFF6A,1,1);
+    if(W->phase==WPH_PRIZE && W->prize>0 && W->shown>=W->prize){
+      const float ih=24.0f;
+      lz_icon(WCX_R-lz_icon_w(ih)*0.5f,cy+150,ih,wp_mask(B_A|B_START),LZ_GOLD,255);
+      lz_neon(LZF_NEON_M,"PRESS SPIN TO COLLECT",WCX_R,cy+206,
+              wh_fit(LZF_NEON_M,"PRESS SPIN TO COLLECT",30,WCOL_W-36),LZ_GREEN,blink?1.0f:0.3f,0.8f);
+    }
     break;
   }
   if(W->spins>0 || W->face) {
     snprintf(b,sizeof b,W->face?"SUPER SPIN":"SPIN %d",W->spins<1?1:W->spins);
-    text(b,1112,600,2,0xC8D2F0,1,1);
+    wh_spaced(b,WCX_R,WS_Y+WS_H-34,W->face?lz_hot(LZ_MAGENTA,0.4f):LZ_DIM);
   }
 
-  /* the prize plate, once the title slam has cleared */
+  /* the prize plate, lounge glass with a neon edge in the prize's colour,
+     once the title slam has cleared */
   if(W->phase>=WPH_PRIZE && W->prize>0 && !fx_transition_busy()){
-    int pw=560, ph=150, px=WH_CX-pw/2, py=486;
-    fb_rrect(px-10,py-10,pw+20,ph+20,30,0x000000,120);
-    fb_rrectg(px,py,pw,ph,24,0x3A0A52,0x0A0214,240);
-    fb_rframe(px,py,pw,ph,24,3.0f,0xFFD24A,255);
-    fb_rframe(px+7,py+7,pw-14,ph-14,18,1.0f,0x8A6A10,220);
+    static const uint32_t PLC[3]={LZ_HONEY,LZ_CYAN,LZ_MAGENTA};
+    int px=WH_CX-WPLATE_W/2, py=WPLATE_Y;
+    int k=W->potTier==JP_MEGA?2:(W->potTier==JP_MINOR?1:0);
+    blit(&whPlate[k],px-WPLATE_M,py-WPLATE_M,clip_y0,clip_y1,255,0,0.0f);
+    wh_spaced(W->potTier>=0?"JACKPOT PAYS":(W->face?"THE SUPER WHEEL PAYS":"THE WHEEL PAYS"),
+              WH_CX,py+12,lz_hot(PLC[k],0.35f));
     if(W->potTier>=0) snprintf(b,sizeof b,"%s JACKPOT",JP_NAME[W->potTier]);
     else snprintf(b,sizeof b,"%d X BET",wh_table(W->face)[W->landed].val);
-    textb(b,WH_CX,py+16,5,W->potTier==JP_MEGA?RAINBOWG:GOLDG,W->potTier==JP_MEGA?6:5,1);
-    int nd=1; for(long long q=W->prize;q>=10;q/=10) nd++;   /* sized to the prize */
-    if(nd>12) nd=12;
+    lz_gold(LZF_DISP_M,b,WH_CX,(float)py+60,wh_fit(LZF_DISP_M,b,46,WPLATE_W-60),1.0f,0.6f);
     float pl=0.5f+0.5f*sinf(W->anim*9.0f);
-    uint32_t oc=W->shown>=W->prize?mixc(0xFFB020,0xFFF4C0,pl*0.6f):0xFFB020;
-    seg_num(W->shown,WH_CX+seg_width(nd,26,60,1)/2,py+70,nd,26,60,oc,0x4A3406,1);
+    uint32_t oc=W->shown>=W->prize?mixc(LZ_GOLD,0xFFF6D0,pl*0.6f):LZ_GOLD;
+    wh_count(W->shown,(float)WH_CX,py+92,56,oc);
   }
   draw_parts();            /* coin bursts land over the stage, not under it */
   fx_draw();
