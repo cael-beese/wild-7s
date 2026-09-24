@@ -3555,7 +3555,7 @@ static void update(void){
 }
 
 /* ═══ CABINET CHROME ═══════════════════════════════════════════════
- *  Seven-segment readouts, moulded keycaps and the SPIN dome.  These
+ *  Seven-segment readouts and the SPIN dome.  These
  *  are what make a slot look like a machine rather than a web page,
  *  and they are all cheap: filled spans, no sprites.
  * ================================================================= */
@@ -3743,28 +3743,6 @@ static void led_window(int x,int y,int w,int h){
   fb_rframe(x,y,w,h,7,1.5f,0x3A3E4C,255);
   for(int i=8;i<w-8;i++) fb_blend(x+i,y+h-2,0x9AA2B8,90);   /* lower lip catches light */
   for(int i=10;i<w*0.55f;i++) fb_blend(x+i,y+4,0xFFFFFF,14);  /* glass glint */
-}
-
-/*  Moulded keycap: light top face, shaded sides, engraved label.  It is
- *  drawn live by the ADD CREDITS chooser, so it stays on the cheap
- *  primitives; the deck buttons are baked richer below.             */
-static void keycap(int x,int y,int w,int h,const char*l1,const char*l2,
-                   int pressed,uint32_t face){
-  int dy = pressed?3:0;
-  fb_rrect(x+2,y+6,w,h,10,0x000000,190);                  /* cast shadow */
-  if(!pressed)                                             /* body side  */
-    fb_rrectg(x,y+dy+4,w,h,10,scalec(face,0.42f),scalec(face,0.22f),255);
-  fb_rrectg(x,y+dy,w,h-(pressed?0:4),10,
-            mixc(face,0xFFFFFF,0.40f),scalec(face,0.70f),255);
-  for(int j=0;j<h/3;j++){                                  /* top gloss  */
-    int a=(h/3-j)*4;
-    for(int i=6;i<w-6;i++) fb_blend(x+i,y+dy+2+j,0xFFFFFF,a);
-  }
-  fb_rframe(x,y+dy,w,h-(pressed?0:4),10,1.5f,scalec(face,0.30f),220);
-  fb_rframe(x+2,y+dy+2,w-4,h-(pressed?4:8),8,1.0f,0xFFFFFF,70);
-  int ty = y+dy+(l2? h/2-16 : h/2-11);
-  text(l1,x+w/2,ty,2,0x14141C,1,0);
-  if(l2) text(l2,x+w/2,ty+18,2,0x14141C,1,0);
 }
 
 /* ── additive sprites: glows, halos, bulbs ─────────────────────────
@@ -4139,55 +4117,22 @@ static void shine_sprite(const spr_t*s,int dx,int dy,int cy0,int cy1,float pos,i
 }
 
 /* the baked titles */
-enum { TT_LOGO, TT_LOGOBIG, TT_FREESPINS, TT_FSDONE, TT_BONUSDONE, TT_PICK,
-       TT_BROKE, TT_PRESS, TT_TOTALWIN, NTT };
+/* (The banner screens and the attract loop set their words live in the
+   lounge's type - see SHOWTIME - so only these two are baked.) */
+enum { TT_LOGO, TT_PICK, NTT };
 static spr_t title[NTT];
-static spr_t bigdig[10];            /* big gold digits for the count-ups */
-static spr_t digX;                  /* the "X" that goes with them       */
-static spr_t bigPlus;               /* and the "+" of a retrigger        */
-#define NCAP 9
-static spr_t capSpr[NCAP];          /* the attract loop's captions       */
-static const char*CAPS[NCAP]={"WILD 7","SCATTER","LUCKY 7 PICK","HOLD & SPIN","WHEEL OF 7'S",
-                              "JACKPOT","ULTIMATE","4 PROGRESSIVE JACKPOTS","FEATURES"};
 
 static const uint32_t TGOLD[6]  ={0xFFFEF0,0xFFF0B0,0xFFD24A,0xE8A018,0xFFD870,0xA86A08};
-static const uint32_t TGREEN[5] ={0xF4FFE8,0xB8FF8A,0x3CD23C,0x16861E,0x7CE860};
-static const uint32_t TRED[5]   ={0xFFF0E8,0xFF9A7A,0xF02A2A,0x9A0A14,0xFF6A4A};
-static const uint32_t TSILVER[5]={0xFFFFFF,0xEEF4FF,0xB0BCD8,0x6A7898,0xDCE4F8};
 
 static void build_titles(void){
   tstyle_t logo ={TGOLD,6,0x1A0600,0xFF3010,0.95f,7,1,0.85f};
-  tstyle_t logoB={TGOLD,6,0x1A0600,0xFF2A10,0.90f,18,1,0.85f};
-  tstyle_t fs   ={TGREEN,5,0x021A06,0x40FF60,0.85f,16,1,0.55f};
-  tstyle_t gold ={TGOLD,6,0x1A0600,0xFFB020,0.80f,14,1,0.80f};
   tstyle_t pick ={TGOLD,6,0x1A0600,0xC040FF,0.85f,10,1,0.80f};
-  tstyle_t red  ={TRED,5,0x1A0204,0xFF2020,0.85f,14,1,0.50f};
-  tstyle_t silv ={TSILVER,5,0x0A0C18,0x60B0FF,0.80f,10,0,0.70f};
   bake_title(&title[TT_LOGO],     "WILD 7's",5,&logo);
-  bake_title(&title[TT_LOGOBIG],  "WILD 7's",15,&logoB);
-  bake_title(&title[TT_FREESPINS],"FREE SPINS",12,&fs);
-  bake_title(&title[TT_FSDONE],   "FREE SPINS COMPLETE",6,&fs);
-  bake_title(&title[TT_BONUSDONE],"BONUS COMPLETE",8,&gold);
   bake_title(&title[TT_PICK],     "LUCKY 7 PICK",6,&pick);
-  bake_title(&title[TT_BROKE],    "OUT OF CREDITS",8,&red);
-  bake_title(&title[TT_PRESS],    "PRESS START",6,&silv);
-  bake_title(&title[TT_TOTALWIN], "TOTAL WIN",5,&gold);
-  for(int d=0;d<10;d++){ char b[2]={(char)('0'+d),0}; bake_title(&bigdig[d],b,16,&gold); }
-  bake_title(&digX,"X",11,&gold);
-  bake_title(&bigPlus,"+",11,&gold);
-  { tstyle_t cap={TGOLD,6,0x1A0600,0xFF9020,0.70f,5,1,0.80f};
-    for(int i=0;i<NCAP;i++) bake_title(&capSpr[i],CAPS[i],5,&cap); }
 }
 static void spr_free_t(spr_t*s){ free(s->px); free(s->rx0); free(s->rx1); memset(s,0,sizeof *s); }
 static void free_titles(void){
-  spr_t*all[NTT+11];
-  int n=0;
-  for(int i=0;i<NTT;i++) all[n++]=&title[i];
-  for(int i=0;i<10;i++) all[n++]=&bigdig[i];
-  all[n++]=&digX;
-  spr_free_t(&bigPlus);
-  for(int i=0;i<NCAP;i++) spr_free_t(&capSpr[i]);
-  for(int i=0;i<n;i++){ free(all[i]->px); free(all[i]->rx0); free(all[i]->rx1); memset(all[i],0,sizeof(spr_t)); }
+  for(int i=0;i<NTT;i++) spr_free_t(&title[i]);
 }
 
 /* ═══ BACKGROUND (built once, then memcpy'd every frame) ═══════════ */
@@ -4706,12 +4651,12 @@ static void build_bg_theme(int theme){
 static uint32_t *bgBase=NULL, *bgFree=NULL;
 static void build_marquee(void);
 static void build_fire(void);
-static void build_rays(void);
+static void build_showtime(void);
 static void build_pick_assets(void);
 static void build_bg(void){
   build_titles();
   build_fire();
-  build_rays();
+  build_showtime();                  /* the banner screens' glass and light */
   make_glow(&bulbspr[0],9,0xFFD890,1.8f,0.6f);
   make_glow(&bulbspr[1],9,0xFF5030,1.8f,0.6f);
   make_glow(&sparkspr,7,0xFFFFFF,2.5f,0.8f);
@@ -5471,38 +5416,15 @@ static void draw_paytable(void){
 /* the jackpot celebration */
 static void draw_jackpot(void){ fx_jackpot_draw(); }   /* w7_fx.c */
 
-/* the ADD CREDITS chooser, over the reel window */
-static void draw_addcr(void){
-  dim(150);
-  int pw=GW+16, ph=250, px=GX-8, py=GY+GH/2-ph/2;
-  fb_rrect(px-10,py-10,pw+20,ph+20,26,0x000000,120);
-  fb_rrectg(px,py,pw,ph,18,0x2B3358,0x080B18,245);
-  fb_rframe(px,py,pw,ph,18,3.0f,0xF0C24A,255);
-  fb_rframe(px+6,py+6,pw-12,ph-12,14,1.0f,0x8A6A10,220);
-  textb("ADD CREDITS",FBW/2,py+14,5,GOLDG,5,1);
-  text("HOW MANY?",FBW/2,py+68,2,0xC8D2F0,1,1);
-  const int tw=92, gap=10;
-  int x0=px+(pw-(NADDS*tw+(NADDS-1)*gap))/2, ty=py+96;
-  char b[16];
-  for(int i=0;i<NADDS;i++){
-    int x=x0+i*(tw+gap), sel=(i==G.addIdx);
-    float pl=sel?0.5f+0.5f*sinf(G.t*8.0f):0.0f;
-    keycap(x,ty,tw,60,"",NULL,sel,sel?0xFFE9A8:0xB9BECC);
-    if(sel) fb_rframe(x-4,ty-4,tw+8,68,13,2.5f,mixc(0xFFD24A,0xFFFFFF,pl),255);
-    snprintf(b,sizeof b,"%d",ADDS[i]);
-    text(b,x+tw/2,ty+(sel?3:0)+20,sel?3:2,sel?0x14141C:0x2A2A38,1,0);
-  }
-  text("LEFT / RIGHT TO CHOOSE     A TO ADD     B TO CANCEL",FBW/2,py+188,2,0xFFFFFF,1,1);
-  snprintf(b,sizeof b,"BANK  %lld",G.credits);
-  text(b,FBW/2,py+214,2,0x8AF0FF,1,1);
-}
-
 /* ═══ SHOWTIME: the big moments ════════════════════════════════════
- *  Free spins awarded, a feature over, the attract loop.  These are the
- *  screens that sell the machine from across the room, so they get the
- *  Hollywood treatment - turning sunbursts, titles that zoom in and
- *  settle, counters that roll - and all of it is baked sprites, lookup
- *  tables and a hash of the clock: no per-pixel maths, no state.
+ *  Free spins awarded, a feature over, out of credits, ADD CREDITS and
+ *  the attract loop.  They are dressed as the lounge is (Beese's Poker
+ *  Lounge): the game dimmed behind and lit by soft pools of coloured
+ *  light, dark glass panels with a neon tube, neon-sign lettering and
+ *  gold display type.  The big panels are baked at init
+ *  (build_showtime), the type comes out of the lounge's string cache and
+ *  the light is a table lookup, so a frame is copies, one dim and a few
+ *  adds - no per-pixel maths, and no state.
  * ================================================================= */
 static void commas(char*out,size_t n,long long v);
 /* the sign in the middle of the top box: see build_marquee() */
@@ -5511,126 +5433,74 @@ static void commas(char*out,size_t n,long long v);
 #define MQPY 3
 #define MQPH (MQH-6)
 
-/*  A rotating sunburst.  The angle and falloff of every point of a
- *  half-resolution field are tabulated once, so a frame is a table
- *  lookup and an add per 2x2 block, and only inside the burst.       */
-#define RAYW 640
-#define RAYH 360
-static uint8_t *rayAng=NULL, *rayFall=NULL;
-static uint8_t rayProf[256];
-static void build_rays(void){
-  rayAng=(uint8_t*)malloc(RAYW*RAYH); rayFall=(uint8_t*)malloc(RAYW*RAYH);
-  if(!rayAng||!rayFall){ free(rayAng); free(rayFall); rayAng=rayFall=NULL; return; }
-  for(int y=0;y<RAYH;y++) for(int x=0;x<RAYW;x++){
-    float dx=(x-RAYW*0.5f+0.5f)*2.0f, dy=(y-RAYH*0.5f+0.5f)*2.0f;
-    float a=fast_atan2(dy,dx)/TAU+0.5f;
-    float d=sqrtf((dx/640.0f)*(dx/640.0f)+(dy/400.0f)*(dy/400.0f));
-    float f=clampf(1.0f-d,0,1);
-    f=f*smooth01(0.0f,0.12f,d);
-    rayAng[y*RAYW+x]=(uint8_t)((int)(a*256.0f)&255);
-    rayFall[y*RAYW+x]=(uint8_t)(f*255.0f);
-  }
-  for(int i=0;i<256;i++){ float t=i/256.0f; rayProf[i]=(uint8_t)(255.0f*smooth01(0.18f,0.34f,t)*(1.0f-smooth01(0.66f,0.82f,t))); }
-}
-/*  Two counter-rotating bursts in one pass (the second may be off,
- *  k2=0): one read-modify-write per pixel however many layers.      */
-static void draw_sunburst2(int cx,int cy,float rot,int nrays,uint32_t col,int k,
-                           float rot2,int nrays2,uint32_t col2,int k2){
-  if(!rayAng||(k<=0&&k2<=0)) return;
-  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
-  int dr=(col2>>16)&255, dg=(col2>>8)&255, db=col2&255;
-  int r256=(int)(rot*256.0f), q256=(int)(rot2*256.0f);
-  for(int yy=0;yy<RAYH;yy++){
-    int sy=cy+(yy-RAYH/2)*2;
-    if(sy+1<clip_y0||sy>=clip_y1||sy<0||sy+1>=FBH) continue;
-    const uint8_t*fa=rayFall+yy*RAYW, *aa=rayAng+yy*RAYW;
-    uint32_t*r0=fb+(size_t)sy*FBW, *r1=r0+FBW;
-    int do0=(sy>=clip_y0), do1=(sy+1<clip_y1);
-    int xa=0, xb=RAYW;
-    if(cx-RAYW<0) xa=(RAYW-cx)/2+1;
-    if(cx+RAYW>FBW-2) xb=RAYW-((cx+RAYW)-(FBW-2))/2-1;
-    for(int xx=xa;xx<xb;xx++){
-      int f=fa[xx]; if(!f) continue;
-      int v1=(rayProf[(aa[xx]*nrays+r256)&255]*f>>8)*k>>8;
-      int v2=k2>0?(rayProf[(aa[xx]*nrays2+q256)&255]*f>>8)*k2>>8:0;
-      if(v1+v2<=2) continue;
-      int ar=(cr*v1+dr*v2)>>8, ag=(cg*v1+dg*v2)>>8, ab=(cb*v1+db*v2)>>8;
-      int sx=cx+(xx-RAYW/2)*2;
-      for(int q=0;q<2;q++){
-        if(q==0 && !do0) continue;
-        if(q==1 && !do1) continue;
-        uint32_t*d=(q?r1:r0)+sx;
-        for(int e=0;e<2;e++){
-          uint32_t c=d[e];
-          int r=((c>>16)&255)+ar, g=((c>>8)&255)+ag, bb=(c&255)+ab;
-          d[e]=RGB(r>255?255:r,g>255?255:g,bb>255?255:bb);
-        }
-      }
+/* ── the lounge light ────────────────────────────────────────────────
+ *  Three soft lights, tabulated once at half resolution: a pool behind
+ *  the title and a searchlight leaning in from each top corner, the way
+ *  the poker game lights its big moments.  A screen picks their colours
+ *  and strengths; each pixel is then a dim (shifts and masks), three
+ *  loads and one packed add.                                          */
+#define OVLW (FBW/2)
+#define OVLH (FBH/2)
+static uint8_t *ovLight=NULL;         /* pool, left beam, right beam: OVLW x OVLH each */
+
+static void build_light(void){
+  ovLight=(uint8_t*)malloc((size_t)3*OVLW*OVLH);
+  if(!ovLight) return;
+  for(int y=0;y<OVLH;y++) for(int x=0;x<OVLW;x++){
+    float fx=x*2.0f+1.0f, fy=y*2.0f+1.0f;
+    float ex=(fx-FBW*0.5f)/600.0f, ey=(fy-230.0f)/260.0f, d=ex*ex+ey*ey;
+    float v[3];
+    v[0]=d<1.0f?(1.0f-d)*(1.0f-d):0.0f;
+    for(int s=0;s<2;s++){
+      /* from just off a top corner, aimed at the foot of the screen's middle */
+      float ox=s?FBW+60.0f:-60.0f, oy=-80.0f, dx=s?-0.62f:0.62f, dy=0.785f;
+      float px=fx-ox, py=fy-oy, t=px*dx+py*dy, q=fabsf(px*dy-py*dx);
+      float u=q/(30.0f+t*0.20f);
+      v[1+s]=t>0?expf(-u*u*1.8f)*clampf(1.0f-t/1100.0f,0,1)*smooth01(0.0f,160.0f,t):0.0f;
     }
+    for(int p=0;p<3;p++) ovLight[(size_t)p*OVLW*OVLH+(size_t)y*OVLW+x]=(uint8_t)(clampf(v[p],0,1)*255.0f);
   }
-}
-static __attribute__((unused)) void draw_sunburst(int cx,int cy,float rot,int nrays,uint32_t col,int k){
-  draw_sunburst2(cx,cy,rot,nrays,col,k,0,1,0,0);
 }
 
-/*  The banner screens dim the game and throw a sunburst over it.  Done
- *  as two passes that is two read-modify-writes of most of a megapixel;
- *  fused, it is one.  deep=0 keeps 3/8 of the scene, deep=1 keeps 9/32.
- *  Everything below y0 (the marquee is spared) is touched.            */
-static void dim_burst(int y0,int deep,int cx,int cy,
-                      float rot,int nrays,uint32_t col,int k,
-                      float rot2,int nrays2,uint32_t col2,int k2){
-  /*  After the dim no channel is above 94, so the light added can be
-   *  capped at 161 and summed as one packed word, no per-channel clamp.
-   *  The light for every (falloff, angle) pair is tabulated per frame:
-   *  32 x 256 words, then each pixel is a shift, two loads and an add. */
-  uint32_t T[32][256];            /* per call, so bands never share it */
-  int cr=(col>>16)&255, cg=(col>>8)&255, cb=col&255;
-  int dr=(col2>>16)&255, dg=(col2>>8)&255, db=col2&255;
-  int r256=(int)(rot*256.0f), q256=(int)(rot2*256.0f);
-  int lit=(rayAng && (k>0||k2>0));
-  if(lit) for(int a=0;a<256;a++){
-    int p1=rayProf[(a*nrays+r256)&255]*k>>8, p2=k2>0?rayProf[(a*nrays2+q256)&255]*k2>>8:0;
-    for(int f=0;f<32;f++){
-      int v1=p1*f/31, v2=p2*f/31;
-      int ar=(cr*v1+dr*v2)>>8, ag=(cg*v1+dg*v2)>>8, ab=(cb*v1+db*v2)>>8;
-      if(ar>161) ar=161;
-      if(ag>161) ag=161;
-      if(ab>161) ab=161;
-      T[f][a]=RGB(ar,ag,ab);
+/*  The game below y0 dimmed - to 3/8 (deep 0), 9/32 (1) or 3/16 (2) - and
+ *  lit: the pool in c0 at strength k0, the beams in c1 and c2 (0..256).
+ *  After the dim no channel is above 94, and the lights add at most 70 +
+ *  45 + 45, so the packed add can never carry into the next channel.  */
+static void lounge_light(int y0,int deep,uint32_t c0,int k0,uint32_t c1,int k1,uint32_t c2,int k2){
+  uint32_t T[3][256];                   /* per call, so bands never share it */
+  const uint32_t C[3]={c0,c1,c2};
+  const int K[3]={k0,k1,k2}, CAP[3]={70,45,45};
+  for(int p=0;p<3;p++){
+    int k=K[p]<0?0:K[p]>256?256:K[p];
+    int r=(C[p]>>16)&255, g=(C[p]>>8)&255, b=C[p]&255, s=k*CAP[p];
+    for(int v=0;v<256;v++){
+      int m=v*s;                        /* the colour times m/(255*256*255) */
+      T[p][v]=RGB(r*m/16646400,g*m/16646400,b*m/16646400);
     }
   }
-  const uint32_t m2=deep?0x070707:0x1F1F1F; const int s2=deep?5:3;
-  int ya=y0>clip_y0?y0:clip_y0;
+  /* c/4 + c/8, c/4 + c/32 or c/8 + c/16, per channel */
+  const int s1=deep>=2?3:2, s2=deep>=2?4:deep?5:3;
+  const uint32_t m1=0xFFu>>s1, m2=0xFFu>>s2, M1=m1*0x10101u, M2=m2*0x10101u;
+  /* a light row serves two screen rows: look it up once for both */
+  uint32_t add[OVLW];
+  int ya=y0>clip_y0?y0:clip_y0, yl=-1;
   for(int y=ya;y<clip_y1;y++){
     uint32_t*q=fb+(size_t)y*FBW;
-    int yy=((y-cy+RAYH*2)>>1)-RAYH/2;
-    if(!lit||yy<0||yy>=RAYH){
-      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>2)&0x3F3F3F)+((c>>s2)&m2); }
+    if(!ovLight){
+      for(int i=0;i<FBW;i++){ uint32_t c=q[i]; q[i]=((c>>s1)&M1)+((c>>s2)&M2); }
       continue;
     }
-    const uint8_t*fa=rayFall+yy*RAYW, *aa=rayAng+yy*RAYW;
-    int xo=((0-cx+RAYW*2)>>1)-RAYW/2;
-    for(int x=0;x<FBW;x+=2){
-      int xx=xo+(x>>1);
-      uint32_t add = (xx>=0&&xx<RAYW) ? T[fa[xx]>>3][aa[xx]] : 0;
-      uint32_t c0=q[x], c1=q[x+1];
-      q[x]  =((c0>>2)&0x3F3F3F)+((c0>>s2)&m2)+add;
-      q[x+1]=((c1>>2)&0x3F3F3F)+((c1>>s2)&m2)+add;
+    if((y>>1)!=yl){
+      yl=y>>1;
+      const uint8_t*l0=ovLight+(size_t)yl*OVLW, *l1=l0+OVLW*OVLH, *l2=l1+OVLW*OVLH;
+      for(int i=0;i<OVLW;i++) add[i]=T[0][l0[i]]+T[1][l1[i]]+T[2][l2[i]];
+    }
+    for(int i=0;i<OVLW;i++){
+      uint32_t a=q[2*i], b=q[2*i+1];
+      q[2*i]  =((a>>s1)&M1)+((a>>s2)&M2)+add[i];
+      q[2*i+1]=((b>>s1)&M1)+((b>>s2)&M2)+add[i];
     }
   }
-}
-
-/*  A neon tube round a panel, cheap enough to run live: a stepped
- *  additive halo on the perimeter only, and the tube itself.         */
-static void neon_live(int x,int y,int w,int h,float r,uint32_t col,int k){
-  for(int i=1;i<=8;i++) add_frame(x-i,y-i,w+2*i,h+2*i,col,(9-i)*(9-i)*k>>8);
-  fb_rframe(x,y,w,h,r,2.0f,mixc(col,0xFFFFFF,0.45f),255);
-}
-static uint32_t hue_at(float t){
-  static const uint32_t H[6]={0xFF4060,0xFFB030,0xE0FF40,0x40FFA0,0x40B0FF,0xB050FF};
-  t-=floorf(t); t*=6.0f; int i=(int)t;
-  return mixc(H[i%6],H[(i+1)%6],t-i);
 }
 
 /*  A dim that spares the marquee, which keeps selling while a banner is
@@ -5647,33 +5517,247 @@ static void dim_below(int y0,int a){
   } else fb_shade_rect(0,y0,FBW,FBH-y0,0x000000,a);
 }
 
+/* ── glass, baked ────────────────────────────────────────────────────
+ *  The lounge's glass panels and neon buttons are painted by the vector
+ *  rasteriser, far too slow to run live, so the fixed ones are baked at
+ *  init.  They are kept premultiplied, as the rasteriser leaves them, and
+ *  pm_blit composites them "over": the light a panel carries - its
+ *  tube's glow - adds, and the glass covers.                          */
+#define OVM 30                          /* a baked panel's margin: its glow spills that far */
+typedef struct {
+  int w,h;
+  uint32_t*px;                          /* alpha<<24 | premultiplied RGB                 */
+  int16_t *x0,*x1;                      /* each row's occupied span                      */
+  int16_t *o0,*o1;                      /* and the opaque run in it, [o0,o1): just copied */
+} pmspr_t;
+
+/* A rasteriser canvas into a pmspr_t, with each row's occupied span; frees the canvas. */
+static void pm_from_cv(pmspr_t*o,LCanvas*cv){
+  memset(o,0,sizeof *o);
+  if(!cv->px) return;
+  int w=cv->w, h=cv->h;
+  o->px=(uint32_t*)malloc((size_t)w*h*4);
+  o->x0=(int16_t*)malloc((size_t)h*sizeof(int16_t));
+  o->x1=(int16_t*)malloc((size_t)h*sizeof(int16_t));
+  o->o0=(int16_t*)malloc((size_t)h*sizeof(int16_t));
+  o->o1=(int16_t*)malloc((size_t)h*sizeof(int16_t));
+  if(o->px&&o->x0&&o->x1&&o->o0&&o->o1){
+    o->w=w; o->h=h;
+    for(int y=0;y<h;y++){
+      int a=-1, b=-1, r0=0, best0=0, best1=0;
+      for(int x=0;x<w;x++){
+        const uint8_t*p=cv->px+((size_t)y*cv->stride+x)*4;
+        uint32_t v=((uint32_t)p[3]<<24)|RGB(p[0],p[1],p[2]);
+        o->px[(size_t)y*w+x]=v;
+        if(v){ if(a<0) a=x; b=x; }
+        if(p[3]<255) r0=x+1;
+        else if(x+1-r0>best1-best0){ best0=r0; best1=x+1; }
+      }
+      o->x0[y]=(int16_t)(a<0?0:a); o->x1[y]=(int16_t)(a<0?-1:b);
+      o->o0[y]=(int16_t)best0; o->o1[y]=(int16_t)best1;
+    }
+  } else { free(o->px); free(o->x0); free(o->x1); free(o->o0); free(o->o1); memset(o,0,sizeof *o); }
+  free(cv->px); cv->px=NULL;
+}
+static void pm_free(pmspr_t*o){ free(o->px); free(o->x0); free(o->x1); free(o->o0); free(o->o1); memset(o,0,sizeof *o); }
+
+/*  A glass canvas with art drawn over it by the live primitives (paint,
+ *  in screen coordinates, the canvas's corner at x, y) baked together
+ *  into o - build time: it borrows fb and puts it back.  Painted over
+ *  black, what lands on the glass is its final colour, and what a glow
+ *  spills into the margin is kept as added light, which is what
+ *  pm_blit's premultiplied "over" does with it.  Frees the canvas.    */
+static void pm_capture(pmspr_t*o,LCanvas*cv,int x,int y,void(*paint)(const void*),const void*arg){
+  int w=cv->w, h=cv->h;
+  uint32_t*save=cv->px?(uint32_t*)malloc((size_t)w*h*4):NULL;
+  if(save){
+    for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+      int fx=x+i, fy=y+j, in=(unsigned)fx<FBW&&(unsigned)fy<FBH;
+      save[(size_t)j*w+i]=in?fb[fy*FBW+fx]:0;
+      if(in) fb[fy*FBW+fx]=0;
+    }
+    lz_cv_to_fb(cv,x,y);
+    paint(arg);
+    for(int j=0;j<h;j++) for(int i=0;i<w;i++){
+      int fx=x+i, fy=y+j;
+      if((unsigned)fx>=FBW||(unsigned)fy>=FBH) continue;
+      uint32_t c=fb[fy*FBW+fx];
+      uint8_t*q=cv->px+((size_t)j*cv->stride+i)*4;
+      q[0]=(uint8_t)(c>>16); q[1]=(uint8_t)(c>>8); q[2]=(uint8_t)c;
+      fb[fy*FBW+fx]=save[(size_t)j*w+i];
+    }
+    free(save);
+  }
+  pm_from_cv(o,cv);
+}
+
+/*  d = s + d*(1-a), at opacity op/256: two packed multiplies per pixel
+ *  and a saturating add, since a glow can carry more light than cover.
+ *  The glass itself is opaque, and its run of each row is just copied. */
+static void pm_blit(const pmspr_t*s,int x,int y,int op){
+  if(!s->px||op<=0) return;
+  if(op>256) op=256;
+  int y0=y<0?0:y, y1=y+s->h>FBH?FBH:y+s->h;
+  if(!clip_rows(&y0,&y1)) return;
+  for(int fy=y0;fy<y1;fy++){
+    int j=fy-y, xa=s->x0[j], xb=s->x1[j]+1;
+    if(x+xa<0) xa=-x;
+    if(x+xb>FBW) xb=FBW-x;
+    const uint32_t*p=s->px+(size_t)j*s->w;
+    uint32_t*d=fb+(size_t)fy*FBW+x;
+    #define PM_OVER(A,SRB,SG) do{ uint32_t a_=(A), ia=256-a_-(a_>>7), c=d[i];         uint32_t rb=((((c&0xFF00FFu)*ia)>>8)&0xFF00FFu)+(SRB), g=((((c&0x00FF00u)*ia)>>8)&0x00FF00u)+(SG);         uint32_t orb=rb&0x01000100u, og=g&0x00010000u;         d[i]=((rb|(orb-(orb>>8)))&0xFF00FFu)|((g|(og-(og>>8)))&0x00FF00u); }while(0)
+    if(op>=256){
+      int oa=s->o0[j], ob=s->o1[j];
+      if(oa<xa) oa=xa;
+      if(ob>xb) ob=xb;
+      if(ob<oa) oa=ob=xb;
+      for(int i=xa;i<oa;i++){ uint32_t v=p[i]; PM_OVER(v>>24,v&0xFF00FFu,v&0x00FF00u); }
+      for(int i=oa;i<ob;i++) d[i]=p[i]&0xFFFFFFu;
+      for(int i=ob;i<xb;i++){ uint32_t v=p[i]; PM_OVER(v>>24,v&0xFF00FFu,v&0x00FF00u); }
+    }
+    else for(int i=xa;i<xb;i++){
+      uint32_t v=p[i];
+      PM_OVER((v>>24)*op>>8,(((v&0xFF00FFu)*op)>>8)&0xFF00FFu,(((v&0x00FF00u)*op)>>8)&0x00FF00u);
+    }
+    #undef PM_OVER
+  }
+}
+
+/* Dark glass w x h with a neon edge and its glow (lz_glass), into a new
+ * canvas with an OVM margin all round, a soft shadow under it. */
+static void ov_glass_cv(LCanvas*cv,int w,int h,uint32_t neon,float glow_k,float r){
+  memset(cv,0,sizeof *cv);
+  if(!lz_cv_new(cv,w+2*OVM,h+2*OVM)) return;
+  float hw=w*0.5f, hh=h*0.5f, cx=OVM+hw, cy=OVM+hh;
+  LShape sh[1]  = { { LSH_RBOX, LOP_UNION, { cx, cy+6, hw, hh, r }, NULL, 0 } };
+  LShape box[1] = { { LSH_RBOX, LOP_UNION, { cx, cy, hw, hh, r }, NULL, 0 } };
+  LFillOpt so = { 0 };
+  so.feather = 12;
+  LPaint black = lpaint_solid(lrc(0, 0, 0, 0.5f));
+  lcv_fill(cv, NULL, sh, 1, &black, &so);
+  LFillOpt g = { 0 };
+  g.outline = 2;
+  g.glow = 10;
+  g.opacity = clampf(0.85f*glow_k, 0, 1);
+  g.blend = LBL_ADD;
+  LPaint np = lpaint_solid(lz_col(neon, 1));
+  lcv_fill(cv, NULL, box, 1, &np, &g);
+  /* opaque: over the dimmed game nothing would show through, and an
+     opaque run is a copy (pm_blit) */
+  LPaint fill = lpaint_linear(lz_col(0x1E1624, 1.0f), 0, cy-hh, lz_col(0x0C080F, 1.0f), 0, cy+hh);
+  lcv_fill(cv, NULL, box, 1, &fill, NULL);
+  /* a faint sheen across the top, as on the poker game's glass */
+  LShape shn[1] = { { LSH_RBOX, LOP_UNION, { cx, cy-hh+14, hw-8, 10, 8 }, NULL, 0 } };
+  LPaint sp = lpaint_linear(lrc(1, 1, 1, 0.07f), 0, cy-hh+4, lrc(1, 1, 1, 0.0f), 0, cy-hh+24);
+  lcv_fill(cv, NULL, shn, 1, &sp, NULL);
+  LFillOpt ol = { 0 };
+  ol.outline = 3;
+  LPaint tube = lpaint_solid(lz_col(lz_hot(neon, 0.3f), 1));
+  lcv_fill(cv, NULL, box, 1, &tube, &ol);
+}
+
+/* A neon button w x h (lz_button), lit or at rest, into a new canvas
+ * with an OVM margin. */
+static void ov_button_cv(LCanvas*cv,int w,int h,uint32_t neon,int lit){
+  memset(cv,0,sizeof *cv);
+  if(!lz_cv_new(cv,w+2*OVM,h+2*OVM)) return;
+  float dy=lit?2.0f:0.0f, hw=w*0.5f, hh=h*0.5f, cx=OVM+hw, cy=OVM+hh+dy, r=14;
+  LShape box[1] = { { LSH_RBOX, LOP_UNION, { cx, cy, hw, hh, r }, NULL, 0 } };
+  LShape sh[1]  = { { LSH_RBOX, LOP_UNION, { OVM+hw, OVM+hh+6, hw, hh, r }, NULL, 0 } };
+  LFillOpt so = { 0 };
+  so.feather = 12;
+  LPaint black = lpaint_solid(lrc(0, 0, 0, 0.6f));
+  lcv_fill(cv, NULL, sh, 1, &black, &so);
+  LFillOpt g = { 0 };
+  g.outline = 2;
+  g.glow = lit ? 13 : 8;
+  g.opacity = lit ? 1.0f : 0.5f;
+  g.blend = LBL_ADD;
+  LPaint np = lpaint_solid(lz_col(neon, 1));
+  lcv_fill(cv, NULL, box, 1, &np, &g);
+  LCol top = lz_col(0x26182C, 1), bot = lrc_mix(lz_col(0x0C080E, 1), lz_col(neon, 1), lit ? 0.72f : 0.32f);
+  LPaint face = lpaint_linear(top, 0, cy-hh, bot, 0, cy+hh);
+  lcv_fill(cv, NULL, box, 1, &face, NULL);
+  LShape shn[1] = { { LSH_RBOX, LOP_UNION, { cx, cy-hh*0.52f, hw-5, hh*0.44f, r-5 }, NULL, 0 } };
+  LPaint sp = lpaint_linear(lrc(1, 1, 1, lit ? 0.22f : 0.13f), 0, cy-hh, lrc(1, 1, 1, 0.02f), 0, cy);
+  lcv_fill(cv, NULL, shn, 1, &sp, NULL);
+  LFillOpt ol = { 0 };
+  ol.outline = 3;
+  LPaint tp = lpaint_solid(lz_col(lz_hot(neon, lit ? 0.6f : 0.25f), 1));
+  lcv_fill(cv, NULL, box, 1, &tp, &ol);
+}
+
+/* the baked glass, and where it goes */
+#define OVSW 820                        /* attract: the big sign        */
+#define OVSH 128
+#define OVSY 72
+#define OVWW 560                        /* attract: the ULTIMATE's well */
+#define OVWH 96
+#define ADW  700                        /* the ADD CREDITS chooser      */
+#define ADH  290
+#define ADKW 96                         /* ... and its amount buttons   */
+#define ADKH 58
+#define OBW  780                        /* out of credits               */
+#define OBH  250
+#define FSBW (MQPX-14)                  /* free spins: the top box's two halves */
+#define FSBH (MQH-12)
+static pmspr_t ovSign[2], ovWell, ovAdd, ovKey[2], ovBroke, ovFsBox;
+
+/*  The attract loop's big sign, as the poker game's attract has it:
+ *  "Beese's" in pink script beside WILD 7'S in honey neon on a glass box.
+ *  Baked with its lettering (ovSign), twice - the script lit, and caught
+ *  in a stutter - since big neon type is the costliest thing on it.  */
+static void sign_letters(const void*arg){
+  float p1=*(const float*)arg;
+  const float s1=96.0f, s2=92.0f, gap=34.0f;
+  float w1=lz_width(LZF_SCRIPT,"Beese's",s1,0), w2=lz_width(LZF_NEON_L,"WILD 7'S",s2,0);
+  float x0=FBW*0.5f-(w1+gap+w2)*0.5f+18.0f, cy=OVSY+OVSH*0.5f;
+  lz_neon(LZF_SCRIPT,"Beese's",x0+w1*0.5f,cy+10.0f,s1,LZ_MAGENTA,p1,0.95f);
+  lz_neon(LZF_NEON_L,"WILD 7'S",x0+w1+gap+w2*0.5f,cy,s2,LZ_HONEY,1.0f,0.9f);
+}
+
+static void build_showtime(void){
+  LCanvas cv;
+  build_light();
+  for(int k=0;k<2;k++){
+    float p1=k?0.35f:1.0f;
+    ov_glass_cv(&cv,OVSW,OVSH,LZ_HONEY,1.0f,18.0f);
+    pm_capture(&ovSign[k],&cv,FBW/2-OVSW/2-OVM,OVSY-OVM,sign_letters,&p1);
+  }
+  ov_glass_cv(&cv,OVWW,OVWH,LZ_MAGENTA,0.9f,16.0f);  pm_from_cv(&ovWell,&cv);
+  ov_glass_cv(&cv,ADW,ADH,LZ_HONEY,0.8f,18.0f);      pm_from_cv(&ovAdd,&cv);
+  ov_button_cv(&cv,ADKW,ADKH,LZ_HONEY,0);            pm_from_cv(&ovKey[0],&cv);
+  ov_button_cv(&cv,ADKW,ADKH,LZ_GOLD,1);             pm_from_cv(&ovKey[1],&cv);
+  ov_glass_cv(&cv,OBW,OBH,LZ_RUBY,1.0f,18.0f);       pm_from_cv(&ovBroke,&cv);
+  ov_glass_cv(&cv,FSBW,FSBH,LZ_GREEN,0.5f,12.0f);    pm_from_cv(&ovFsBox,&cv);
+}
+static void free_showtime(void){
+  pmspr_t*all[]={&ovSign[0],&ovSign[1],&ovWell,&ovAdd,&ovKey[0],&ovKey[1],&ovBroke,&ovFsBox};
+  for(size_t i=0;i<sizeof all/sizeof all[0];i++) pm_free(all[i]);
+  free(ovLight); ovLight=NULL;
+}
+
+/* ── glass, live ─────────────────────────────────────────────────────
+ *  For the panels whose colour changes with what they show: the glass
+ *  as a gradient fill, a stepped additive halo on the perimeter only,
+ *  and the tube.                                                      */
+static void neon_live(int x,int y,int w,int h,float r,uint32_t col,int k){
+  for(int i=1;i<=8;i++) add_frame(x-i,y-i,w+2*i,h+2*i,col,(9-i)*(9-i)*k>>8);
+  fb_rframe(x,y,w,h,r,2.0f,mixc(col,0xFFFFFF,0.45f),255);
+}
+static void ov_panel(int x,int y,int w,int h,uint32_t neon,int k){
+  fb_rrectg(x,y,w,h,14,0x1E1624,0x0C080F,230);
+  neon_live(x,y,w,h,14,neon,k);
+}
+static uint32_t hue_at(float t){
+  static const uint32_t H[6]={0xFF4060,0xFFB030,0xE0FF40,0x40FFA0,0x40B0FF,0xB050FF};
+  t-=floorf(t); t*=6.0f; int i=(int)t;
+  return mixc(H[i%6],H[(i+1)%6],t-i);
+}
+
 static float ease_back(float x){ x=clampf(x,0,1); const float c1=1.70158f,c3=c1+1.0f; float p=x-1.0f; return 1.0f+c3*p*p*p+c1*p*p; }
 
-/* a big title that zooms in, overshoots and settles, then shines */
-static void title_zoom(int id,int cx,int cy,float t,float speed){
-  const spr_t*s=&title[id];
-  float z=ease_back(t*speed);
-  if(t*speed<1.0f) blit_scaled(s,cx,cy,z,(int)(255*clampf(t*speed*3.0f,0,1)));
-  else {
-    blit(s,cx-s->w/2,cy-s->h/2,0,FBH,255,0,0.0f);
-    float ph=fmodf(t*1.1f,2.2f);
-    if(ph<1.0f) shine_sprite(s,cx-s->w/2,cy-s->h/2,0,FBH,-60.0f+ph*(s->w+160.0f),26,170,210);
-  }
-}
-
-/* big gold digits, centred, for the counters */
-static void big_number(long long v,int cx,int cy,float sc){
-  char b[24]; snprintf(b,sizeof b,"%lld",v);
-  int n=(int)strlen(b), adv=(int)(bigdig[0].w*0.62f*sc), w=adv*(n-1);
-  for(int i=0;i<n;i++){
-    const spr_t*s=&bigdig[b[i]-'0'];
-    int x=cx-w/2+i*adv;
-    if(sc>0.995f && sc<1.005f) blit(s,x-s->w/2,cy-s->h/2,0,FBH,255,0,0.0f);
-    else blit_scaled(s,x,cy,sc,255);
-  }
-}
-
-/* a lit plate for a line of text on a banner */
+/* a lit plate for a line of text on a banner (the pick board's too) */
 static void banner_plate(int cx,int cy,int w,int h,uint32_t rim){
   /* a modest radius keeps the rounded-rect primitives on their fast path */
   fb_rrectg(cx-w/2,cy-h/2,w,h,10,0x140818,0x04020A,225);
@@ -5692,57 +5776,192 @@ static void glint_rain(int n,float t,int k){
   }
 }
 
+/* ── type ────────────────────────────────────────────────────────────
+ *  The kit places a line by its top; these centre the capitals on cy,
+ *  which is what a layout of panels wants.                            */
+static float ov_top(int f,float cy,float size){
+  const lz_font*F=&lzf[f];
+  return cy-(F->capTop+F->capH*0.5f)*(size/F->base);
+}
+/*  UI type with a soft shadow, at opacity op.  The string cache holds
+ *  up to 63 characters and a longer line is rasterised every frame, so a
+ *  long one is set as pieces broken at spaces, each cached.           */
+static void ov_text(int f,const char*s,float x,float cy,float size,uint32_t col,int align,float spacing,float op){
+  if(op<=0.004f) return;
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=col; st.spacing=spacing; st.opacity=op;
+  st.shadow=0x000000; st.shadow_k=0.85f;
+  float top=ov_top(f,cy,size);
+  size_t n=strlen(s);
+  if(n<48){ st.align=align; lz_text_ex(f,s,x,top,size,&st); return; }
+  float w=lz_width(f,s,size,spacing);
+  float pen=align==LZ_CENTER?x-w*0.5f:align==LZ_RIGHT?x-w:x;
+  st.align=LZ_LEFT;
+  char piece[64];
+  for(size_t i=0;i<n;){
+    size_t k=n-i<40?n-i:40;
+    if(i+k<n) while(k>8 && s[i+k-1]!=' ') k--;     /* end each piece on a space */
+    memcpy(piece,s+i,k); piece[k]=0;
+    lz_text_ex(f,piece,pen,top,size,&st);
+    pen+=lz_width(f,piece,size,spacing)+spacing;
+    i+=k;
+  }
+}
+/* a neon sign centred on (cx, cy), as lz_neon, that can also fade */
+static void ov_neon(int f,const char*s,float cx,float cy,float size,uint32_t tube,float power,float glow_k,float op){
+  if(op<=0.004f) return;
+  power=clampf(power,0,1);
+  lz_style st; memset(&st,0,sizeof st);
+  st.align=LZ_CENTER; st.opacity=op;
+  st.color=mixc(RGB((int)(((tube>>16)&255)*0.28f)+20,(int)(((tube>>8)&255)*0.28f)+16,(int)((tube&255)*0.28f)+22),
+                lz_hot(tube,0.62f),power);
+  st.glow=tube; st.glow_k=glow_k*power;
+  lz_text_ex(f,s,cx,ov_top(f,cy,size),size,&st);
+}
+/*  Gold display type (lz_gold), caps centred on cy, a character at a
+ *  time: x is the centre, or the right edge for LZ_RIGHT.  A count-up
+ *  changes its string every frame, and a changed string is rasterised
+ *  again; one character at a time, a dozen glyph strings are
+ *  rasterised once and then only copied.                              */
+static void ov_goldstr(const char*s,float x,float cy,float size,int align,float op,float glow_k){
+  if(op<=0.004f) return;
+  const int f=LZF_DISP_L;
+  float w=lz_width(f,s,size,0), pen=align==LZ_RIGHT?x-w:x-w*0.5f;
+  float ym=ov_top(f,cy,size)+size*0.5f;          /* lz_gold places by the line's middle */
+  char c[2]={0,0};
+  for(const char*p=s;*p;p++){
+    c[0]=*p;
+    float cw=lz_width(f,c,size,0);
+    if(*p!=' ') lz_gold(f,c,pen+cw*0.5f,ym,size,op,glow_k);
+    pen+=cw;
+  }
+}
+static void ov_number(long long v,float x,float cy,float size,int align,float op,float glow_k){
+  char b[32];
+  commas(b,sizeof b,v);
+  ov_goldstr(b,x,cy,size,align,op,glow_k);
+}
+
+/*  A line of prompts centred on (cx, cy), in the lounge's way of naming
+ *  a control: the panel icon, lit where the buttons are, and what they
+ *  do - never a pad letter (the panel is unlabelled).  bits = the game
+ *  buttons (0: words only, as for the stick); gap = the space before
+ *  the part, in sizes.                                                */
+typedef struct { int bits; const char*s; float gap; } ovkey_t;
+static void ov_keys(const ovkey_t*K,int n,float cx,float cy,float size,uint32_t col,uint32_t lit,float op){
+  if(op<=0.004f) return;
+  const int f=size>=24.0f?LZF_UI_M:LZF_UI_S;
+  const float ih=size, iw=lz_icon_w(ih), ig=size*0.35f, sp=1.0f;
+  float tot=0;
+  for(int i=0;i<n;i++){
+    if(i) tot+=K[i].gap*size;
+    if(K[i].bits) tot+=iw+ig;
+    tot+=lz_width(f,K[i].s,size,sp);
+  }
+  float x=cx-tot*0.5f;
+  for(int i=0;i<n;i++){
+    if(i) x+=K[i].gap*size;
+    if(K[i].bits){ lz_icon(x,cy-ih*0.5f,ih,wp_mask(K[i].bits),lit,(int)(255*op)); x+=iw+ig; }
+    ov_text(f,K[i].s,x,cy,size,col,LZ_LEFT,sp,op);
+    x+=lz_width(f,K[i].s,size,sp);
+  }
+}
+
+/* ── the ADD CREDITS chooser, over the reel window ───────────────────
+ *  What it says is what update() does: the stick chooses, SPIN adds, and
+ *  ADD CREDITS or PAYS closes it (the panel has no B).               */
+static void draw_addcr(void){
+  lounge_light(MQH,1,LZ_HONEY,150,LZ_AMBER,90,LZ_CYAN,90);
+  const int px=FBW/2-ADW/2, py=GY+GH/2-ADH/2;
+  pm_blit(&ovAdd,px-OVM,py-OVM,256);
+  lz_gold(LZF_DISP_M,"ADD CREDITS",FBW*0.5f,py+42.0f,46.0f,1.0f,0.6f);
+  ov_text(LZF_UI_M,"HOW MANY?",FBW*0.5f,py+86.0f,20.0f,lz_hot(LZ_CYAN,0.3f),LZ_CENTER,4.0f,1.0f);
+  const int gap=10;
+  int x0=FBW/2-(NADDS*ADKW+(NADDS-1)*gap)/2, ty=py+110;
+  char b[32];
+  float pl=opt_limiter?0.5f:0.5f+0.5f*sinf(G.t*8.0f);
+  for(int i=0;i<NADDS;i++){
+    int x=x0+i*(ADKW+gap), sel=(i==G.addIdx), dy=sel?2:0;
+    pm_blit(&ovKey[sel],x-OVM,ty-OVM,256);
+    if(sel){
+      lz_add_tint(&lzGlow,x+ADKW/2-32,ty+ADKH/2-32+dy,LZ_GOLD,(int)(60+60*pl));
+      fb_rframe(x-4,ty-4+dy,ADKW+8,ADKH+8,17,2.0f,lz_hot(LZ_GOLD,0.5f),(int)(90+120*pl));
+    }
+    snprintf(b,sizeof b,"%d",ADDS[i]);
+    lz_style st; memset(&st,0,sizeof st);
+    st.color=sel?0xFFFFFF:0xE8D6B0; st.align=LZ_CENTER; st.shadow=0x000000; st.shadow_k=0.85f;
+    lz_text_ex(LZF_DISP_S,b,x+ADKW*0.5f,ov_top(LZF_DISP_S,ty+ADKH*0.5f+dy,24.0f),24.0f,&st);
+  }
+  { static const ovkey_t K[5]={ {0,"STICK: CHOOSE",0}, {B_A|B_START,"SPIN: ADD",1.3f},
+                                {B_Y,"ADD CREDITS",1.3f}, {0,"OR",0.35f}, {B_SELECT,"PAYS: CANCEL",0.35f} };
+    ov_keys(K,5,FBW*0.5f,py+206.0f,20.0f,0xF0E6F4,LZ_HONEY,1.0f); }
+  char c[24];
+  commas(c,sizeof c,G.credits);
+  snprintf(b,sizeof b,"BANK  %s",c);
+  ov_text(LZF_UI_M,b,FBW*0.5f,py+252.0f,24.0f,lz_hot(LZ_CYAN,0.25f),LZ_CENTER,2.0f,1.0f);
+}
+
 /* ── free spins: the status bar takes over the top box ───────────── */
 static void draw_fsbar(void){
   char b[64];
-  float pl=0.5f+0.5f*sinf(artT*4.0f);
+  float pl=opt_limiter?0.5f:0.5f+0.5f*sinf(artT*4.0f);
+  const float cy=6.0f+FSBH*0.5f;
+  const uint32_t cap=lz_hot(LZ_GREEN,0.35f);
   for(int sd=0;sd<2;sd++){
-    int x = sd ? MQPX+MQPW+4 : 10, w = MQPX-14, y=6, h=MQH-12;
-    fb_rrectg(x,y,w,h,12,0x06301A,0x010A04,255);
-    fb_rframe(x,y,w,h,12,2.0f,mixc(0x5AE070,0xE8FFD8,pl*0.5f),255);
-    fb_rframe(x+3,y+3,w-6,h-6,9,1.0f,0xFFD24A,150);
+    int x=sd?MQPX+MQPW+4:10;
+    pm_blit(&ovFsBox,x-OVM,6-OVM,256);
+    fb_rframe(x,6,FSBW,FSBH,12,2.0f,lz_hot(LZ_GREEN,0.6f),(int)(40+110*pl));
   }
-  static const uint32_t G2[4]={0xF4FFE8,0xB8FF8A,0x3CD23C,0x16861E};
-  text("FREE SPINS",40,23,2,0xB8FFB0,0,1);
+  ov_text(LZF_UI_M,"FREE SPINS",32.0f,cy,21.0f,cap,LZ_LEFT,2.0f,1.0f);
   snprintf(b,sizeof b,"%d",G.freeSpins);
-  textb(b,260,15,4,G2,4,1);
-  text(G.freeSpins==1?"LAST ONE":"LEFT",300,23,2,0xE8FFE0,0,1);
-  int m=G.fsMult<1?1:G.fsMult;
+  ov_goldstr(b,262.0f,cy,34.0f,LZ_CENTER,1.0f,0.5f);
+  ov_text(LZF_UI_M,G.freeSpins==1?"LAST ONE":"LEFT",300.0f,cy,21.0f,0xF0E6F4,LZ_LEFT,2.0f,1.0f);
+  int m=G.fsMult<1?1:G.fsMult, rx=MQPX+MQPW+4;
+  ov_text(LZF_UI_M,"MULTIPLIER",rx+22.0f,cy,21.0f,cap,LZ_LEFT,2.0f,1.0f);
   snprintf(b,sizeof b,"X%d",m);
-  text("MULTIPLIER",MQPX+MQPW+34,23,2,0xFFE9A8,0,1);
-  textb(b,MQPX+MQPW+194,15,4,m>1?GOLDG:SILVERG,m>1?5:4,1);
-  if(m>=FS_MAXMULT) text("MAX",MQPX+MQPW+232,23,2,0xFFE9A8,0,1);
+  ov_goldstr(b,rx+184.0f,cy,34.0f,LZ_CENTER,m>1?1.0f:0.55f,m>1?0.7f:0.2f);
+  if(m>=FS_MAXMULT) ov_text(LZF_UI_M,"MAX",rx+222.0f,cy,21.0f,LZ_AMBER,LZ_LEFT,2.0f,1.0f);
   char w[24]; commas(w,sizeof w,G.fsWon);
-  snprintf(b,sizeof b,"WON %s",w);
-  text(b,FBW-36,23,2,0xFFFFFF,2,1);
+  float nw=lz_width(LZF_DISP_L,w,30.0f,0);
+  ov_goldstr(w,FBW-30.0f,cy,30.0f,LZ_RIGHT,1.0f,0.4f);
+  ov_text(LZF_UI_M,"WON",FBW-40.0f-nw,cy,21.0f,cap,LZ_RIGHT,2.0f,1.0f);
 }
 
 /* ── FREE SPINS awarded ─────────────────────────────────────────── */
 static void draw_fsintro(void){
-  float t=G.t;
+  float t=G.t, in=clampf(t*4.0f,0,1);
+  float br=opt_limiter?0.5f:0.5f+0.5f*sinf(artT*2.4f);
   if(t<0.2f) dim_below(MQH,(int)(200*t*5.0f));
-  else dim_burst(MQH,1,FBW/2,330,artT*0.08f,18,0x40FF60,opt_limiter?120:200,
-                 -artT*0.05f,9,0xFFD040,opt_limiter?70:120);
-  title_zoom(TT_FREESPINS,FBW/2,210,t,2.2f);
+  else lounge_light(MQH,2,LZ_GREEN,(int)(190+50*br),LZ_HONEY,210,LZ_CYAN,210);
+  /* the title arrives with a flare of its own light, which settles */
+  float flare=opt_limiter?0.0f:clampf(1.0f-(t-0.2f)*2.5f,0,1);
+  lz_gold(LZF_DISP_L,"FREE SPINS",FBW*0.5f,172.0f,104.0f,in,0.6f+0.9f*flare);
   /* the count rolls like a reel, then lands */
   int award = G.inFree ? FS_RETRIG : FS_AWARD;
-  if(t>0.35f){
-    float u=t-0.35f;
-    int n = u<0.4f ? (int)(dhash((int)(u*24.0f),7)*9.99f) : award;
-    float pop = u<0.4f ? 1.0f : 1.0f+0.35f*clampf(1.0f-(u-0.4f)*4.0f,0,1);
-    if(G.inFree) blit_scaled(&bigPlus,FBW/2-70,392,0.8f*pop,255);
-    big_number(n,FBW/2+(G.inFree?30:0),392,pop);
+  const int pw=560, ph=150, px=FBW/2-pw/2, py=240;
+  if(t>0.25f){
+    float u=t-0.25f, a=clampf(u*5.0f,0,1);
+    ov_panel(px,py,pw,ph,LZ_GREEN,(int)(210*a));
+    ov_text(LZF_UI_M,G.inFree?"MORE FREE SPINS":"FREE SPINS AWARDED",FBW*0.5f,py+26.0f,21.0f,
+            lz_hot(LZ_GREEN,0.35f),LZ_CENTER,4.0f,a);
+    if(u>0.1f){
+      float v=u-0.1f;
+      int n = v<0.4f ? (int)(dhash((int)(v*24.0f),7)*9.99f) : award;
+      float pop = (v<0.4f||opt_limiter) ? 0.0f : clampf(1.0f-(v-0.4f)*3.0f,0,1);
+      char b[16]; snprintf(b,sizeof b,G.inFree?"+%d":"%d",n);
+      ov_goldstr(b,FBW*0.5f,py+92.0f,96.0f,LZ_CENTER,1.0f,0.6f+1.2f*pop);
+    }
   }
   if(t>1.2f){
-    int a=(int)(255*clampf((t-1.2f)*3.0f,0,1));
-    banner_plate(FBW/2,512,900,40,0x5AE070);
+    float a=clampf((t-1.2f)*3.0f,0,1);
+    ov_panel(FBW/2-470,py+ph+26,940,48,LZ_GREEN,(int)(150*a));
     char msg[96];
     if(G.inFree) snprintf(msg,sizeof msg,"%d MORE FREE SPINS  -  THE MULTIPLIER STAYS AT X%d AND KEEPS CLIMBING",
                           FS_RETRIG,G.fsMult<1?1:G.fsMult);
     else snprintf(msg,sizeof msg,"MULTIPLIER STARTS AT X1  -  EVERY WILD REEL ADDS +1, UP TO X%d",FS_MAXMULT);
-    text(msg,FBW/2,505,2,mixc(0x000000,0xE8FFE0,a/255.0f),1,1);
+    ov_text(LZF_UI_M,msg,FBW*0.5f,py+ph+50.0f,23.0f,0xF0FFE8,LZ_CENTER,1.0f,a);
     char b[48]; snprintf(b,sizeof b,"%d SCATTERS",G.scatCount);
-    text(b,FBW/2,556,3,0xFFE9A8,1,1);
+    ov_neon(LZF_NEON_M,b,FBW*0.5f,py+ph+116.0f,40.0f,LZ_HONEY,1.0f,0.8f,a);
   }
   glint_rain(24,t,200);
 }
@@ -5751,56 +5970,62 @@ static void draw_fsintro(void){
 static void draw_bonusend(void){
   float t=G.t;
   int fs=(G.banner==3);
+  uint32_t neon=fs?LZ_GREEN:0xC060FF;
+  float br=opt_limiter?0.5f:0.5f+0.5f*sinf(artT*2.4f);
   if(t<0.2f) dim_below(MQH,(int)(205*t*5.0f));
-  else dim_burst(MQH,1,FBW/2,340,artT*0.07f,16,fs?0x60FF80:0xFFB020,opt_limiter?110:190,
-                 -artT*0.05f,8,0xFFE070,opt_limiter?60:110);
-  title_zoom(fs?TT_FSDONE:TT_BONUSDONE,FBW/2,190,t,2.4f);
+  else lounge_light(MQH,2,LZ_HONEY,(int)(180+50*br),neon,200,LZ_MAGENTA,200);
+  float flare=opt_limiter?0.0f:clampf(1.0f-(t-0.2f)*2.5f,0,1);
+  lz_gold(LZF_DISP_L,fs?"FREE SPINS COMPLETE":"BONUS COMPLETE",FBW*0.5f,168.0f,fs?68.0f:80.0f,
+          clampf(t*4.0f,0,1),0.6f+0.9f*flare);
   long long total = fs ? (long long)G.fsWon
                        : (long long)G.pickTotal*(G.pickMult>0?G.pickMult:1);
+  const int pw=600, ph=150, px=FBW/2-pw/2, py=232;
   if(t>0.3f){
-    const spr_t*tw=&title[TT_TOTALWIN];
-    blit(tw,FBW/2-tw->w/2,300-tw->h/2,0,FBH,255,0,0.0f);
+    float a=clampf((t-0.3f)*5.0f,0,1);
+    ov_panel(px,py,pw,ph,neon,(int)(210*a));
+    ov_text(LZF_UI_M,"TOTAL WIN",FBW*0.5f,py+26.0f,21.0f,lz_hot(neon,0.35f),LZ_CENTER,4.0f,a);
     float u=clampf((t-0.3f)/1.1f,0,1);
     long long shown=(long long)(total*(1.0f-(1.0f-u)*(1.0f-u)));
-    int w=seg_width(10,24,64,1);
-    fb_rrect(FBW/2-w/2-22,346,w+44,88,14,0x000000,230);
-    fb_rframe(FBW/2-w/2-22,346,w+44,88,14,2.0f,0xFFD24A,255);
-    neon_live(FBW/2-w/2-22,346,w+44,88,14,0xFFB020,200);
     float pl=0.5f+0.5f*sinf(artT*8.0f);
-    seg_num(shown,FBW/2+w/2,358,10,24,64,
-            u>=1.0f?mixc(0xFFB020,0xFFFFFF,pl*0.6f):0xFFB020,0x3A2804,1);
+    ov_number(shown,FBW*0.5f,py+92.0f,88.0f,LZ_CENTER,a,u>=1.0f&&!opt_limiter?0.6f+0.6f*pl:0.6f);
   }
-  if(!fs && t>0.9f){
-    char a[24],b[80];
-    commas(a,sizeof a,G.pickTotal);
-    snprintf(b,sizeof b,"COLLECTED %s   X%d MULTIPLIER",a,G.pickMult>0?G.pickMult:1);
-    banner_plate(FBW/2,480,700,40,0xC060FF);
-    text(b,FBW/2,473,2,0xF4E0FF,1,1);
-  }
-  /* the free-spins meter goes back to X1 here: say where it got to */
-  if(fs && t>0.9f){
-    char b[80];
-    int m=G.fsMult<1?1:G.fsMult;
-    if(m>1) snprintf(b,sizeof b,"MULTIPLIER REACHED X%d  -  BACK TO X1 FOR THE BASE GAME",m);
-    else    snprintf(b,sizeof b,"THE MULTIPLIER STAYED AT X1 THIS TIME");
-    banner_plate(FBW/2,480,760,40,0x5AE070);
-    text(b,FBW/2,473,2,0xE8FFE0,1,1);
+  if(t>0.9f){
+    float a=clampf((t-0.9f)*3.0f,0,1);
+    char b[96];
+    if(!fs){
+      char c[24];
+      commas(c,sizeof c,G.pickTotal);
+      snprintf(b,sizeof b,"COLLECTED %s   X%d MULTIPLIER",c,G.pickMult>0?G.pickMult:1);
+    } else {
+      /* the free-spins meter goes back to X1 here: say where it got to */
+      int m=G.fsMult<1?1:G.fsMult;
+      if(m>1) snprintf(b,sizeof b,"MULTIPLIER REACHED X%d  -  BACK TO X1 FOR THE BASE GAME",m);
+      else    snprintf(b,sizeof b,"THE MULTIPLIER STAYED AT X1 THIS TIME");
+    }
+    ov_panel(FBW/2-390,py+ph+26,780,48,neon,(int)(150*a));
+    ov_text(LZF_UI_M,b,FBW*0.5f,py+ph+50.0f,23.0f,0xF8F1E2,LZ_CENTER,1.0f,a);
   }
   glint_rain(30,t,220);
 }
 
+/* ── out of credits ──────────────────────────────────────────────────
+ *  SPIN or ADD CREDITS opens the chooser (update(), ST_BROKE).       */
 static void draw_broke(void){
-  float pl=0.5f+0.5f*sinf(artT*3.0f);
-  dim_burst(MQH,1,FBW/2,300,artT*0.04f,12,0xFF3020,(int)(60+60*pl),0,1,0,0);
-  const spr_t*s=&title[TT_BROKE];
-  blit(s,FBW/2-s->w/2,280-s->h/2,0,FBH,255,0,0.0f);
-  if(((int)(artT*2.0f))&1){
-    banner_plate(FBW/2,400,620,46,0xFF5A5A);
-    text("PRESS START TO ADD CREDITS",FBW/2,391,3,0xFFFFFF,1,1);
-  }
+  float pl=opt_limiter?0.5f:0.5f+0.5f*sinf(artT*3.0f);
+  lounge_light(MQH,2,LZ_RUBY,(int)(150+60*pl),LZ_MAGENTA,150,LZ_MAGENTA,150);
+  const int px=FBW/2-OBW/2, py=196;
+  pm_blit(&ovBroke,px-OVM,py-OVM,256);
+  /* a tired tube: now and then the sign stutters */
+  float h=dhash((int)(artT*10.0f),61), pw=(!opt_limiter && h<0.06f)?0.3f:1.0f;
+  ov_neon(LZF_NEON_L,"OUT OF CREDITS",FBW*0.5f,py+70.0f,80.0f,LZ_RUBY,pw,1.0f,1.0f);
+  ov_text(LZF_UI_M,"THE BANK IS EMPTY  -  FREE PLAY, SO HELP YOURSELF",FBW*0.5f,py+138.0f,23.0f,
+          0xD8CCE0,LZ_CENTER,1.0f,1.0f);
+  static const ovkey_t K[5]={ {0,"PRESS",0}, {B_A|B_START,"SPIN",0.35f}, {0,"OR",0.35f},
+                              {B_Y,"ADD CREDITS",0.35f}, {0,"TO TOP UP",0.35f} };
+  ov_keys(K,5,FBW*0.5f,py+196.0f,27.0f,0xFFFFFF,LZ_GOLD,0.55f+0.45f*pl);
 }
 
-/* ── ATTRACT: a cinematic loop while nobody is playing ───────────── */
+/* ── ATTRACT: the lounge's sign and a loop of what the game does ──── */
 typedef struct { int sy; const char*name; const char*l1; const char*l2; uint32_t col; } show_t;
 static const show_t SHOW[7]={
   {SY_SEVEN,  "WILD 7",       "STANDS IN FOR EVERY PAYING SYMBOL",    "AND EVERY WILD IN A WIN DOUBLES IT - X2, X4, X8", 0xFFC24A},
@@ -5824,81 +6049,92 @@ static const char*FEATLINES[9]={
 };
 #define ATT_LOOP 21.0f
 
+/* The sign (baked: see sign_letters), the bee perched on its corner. */
+static void attract_sign(void){
+  /* now and then the script stutters, as an old tube does */
+  float h=dhash((int)(artT*12.0f),53);
+  pm_blit(&ovSign[!opt_limiter && h<0.025f],FBW/2-OVSW/2-OVM,OVSY-OVM,256);
+  const float s1=96.0f, s2=92.0f, gap=34.0f;
+  float w1=lz_width(LZF_SCRIPT,"Beese's",s1,0), w2=lz_width(LZF_NEON_L,"WILD 7'S",s2,0);
+  float x0=FBW*0.5f-(w1+gap+w2)*0.5f+18.0f;
+  int bx=(int)(x0-lzBee.w*0.62f), by=(int)(OVSY-lzBee.h*0.30f+sinf(artT*2.2f)*3.0f);
+  blit(&lzBee,bx,by,0,FBH,255,0,0.0f);
+}
+
 static void draw_attract(void){
   float T=fmodf(artT,ATT_LOOP);
-  char b[64];
+  float br=opt_limiter?0.5f:0.5f+0.5f*sinf(artT*1.6f);
+  lounge_light(MQH,2,LZ_HONEY,(int)(170+60*br),LZ_HONEY,220,LZ_MAGENTA,220);
+  attract_sign();
+  const float my=366.0f;                   /* the middle of the loop's space */
   if(T<6.0f){
-    /* the logo arrives, and the top prize under it */
-    dim_burst(MQH,0,FBW/2,250,artT*0.06f,20,0xFFB030,opt_limiter?110:180,
-              -artT*0.04f,10,0xFF4060,opt_limiter?60:100);
-    title_zoom(TT_LOGOBIG,FBW/2,215,T,1.6f);
-    if(T>1.0f){
-      int a=(int)(255*clampf((T-1.0f)*3.0f,0,1));
-      text("THE ULTIMATE JACKPOT",FBW/2,356,3,mixc(0,0xFFE9A8,a/255.0f),1,1);
-      int w=seg_width(12,18,48,1);
-      fb_rrect(FBW/2-w/2-18,390,w+36,70,12,0x000000,(int)(a*0.9f));
-      neon_live(FBW/2-w/2-18,390,w+36,70,12,hue_at(artT*0.3f),a);
-      float pl=0.5f+0.5f*sinf(artT*2.0f);
-      seg_num(jp_value(JP_ULT),FBW/2+w/2,401,12,18,48,mixc(0xFFE080,0xFFFFFF,pl*0.5f),0x3A2804,1);
-    }
+    /* the top prize */
+    float a=clampf((T-0.3f)*3.0f,0,1);
+    ov_neon(LZF_NEON_M,"THE ULTIMATE JACKPOT",FBW*0.5f,my-110.0f,38.0f,LZ_CYAN,1.0f,0.8f,a);
+    int wy=(int)my-76;
+    pm_blit(&ovWell,FBW/2-OVWW/2-OVM,wy-OVM,(int)(256*a));
+    ov_number(jp_value(JP_ULT),FBW*0.5f,wy+OVWH*0.5f,64.0f,LZ_CENTER,a,0.5f+0.3f*br);
+    ov_text(LZF_UI_M,"5 ULTIMATES TOUCHING  -  100,000 X YOUR BET",FBW*0.5f,my+62.0f,24.0f,0xF0E6F4,LZ_CENTER,1.0f,a);
+    char m[3][24], b[96];
+    for(int k=0;k<3;k++) commas(m[k],sizeof m[k],jp_value(k+1));
+    snprintf(b,sizeof b,"MEGA %s    MAJOR %s    MINOR %s",m[0],m[1],m[2]);
+    ov_text(LZF_UI_M,b,FBW*0.5f,my+96.0f,22.0f,LZ_HONEY,LZ_CENTER,2.0f,a);
   } else if(T<14.0f){
     /* the feature symbols, one at a time, each with what it does */
-    float u=T-6.0f;
-    int i=(int)(u/(8.0f/7.0f)); if(i>6) i=6;
-    float lt=u-i*(8.0f/7.0f);
+    float u=T-6.0f, per=8.0f/7.0f;
+    int i=(int)(u/per); if(i>6) i=6;
+    float lt=u-i*per;
     const show_t*sh=&SHOW[i];
-    dim_burst(MQH,0,FBW/2,250,artT*0.10f,16,sh->col,opt_limiter?120:200,0,1,0,0);
-    /* the close-up pops in and out; while it holds, it is a plain blit */
+    const int pw=860, ph=236, px=FBW/2-pw/2, py=(int)my-ph/2;
+    ov_panel(px,py,pw,ph,sh->col,210);
+    /* the close-up pops in and out */
     float z=ease_back(lt*3.2f);
     if(lt>1.0f) z*=1.0f-(lt-1.0f)*4.0f;
     const spr_t*bs=&symBig[sh->sy];
     if(bs->px){
-      if(z>0.985f && z<1.015f) blit(bs,FBW/2-bs->w/2,250-bs->h/2,0,FBH,255,0,0.0f);
-      else if(z>0.05f) blit_scaled(bs,FBW/2,250,z*1.08f,255);
-    } else if(z>0.05f) blit_scaled(&sym[sh->sy],FBW/2,250,z*2.3f,255);
-    if(lt>0.25f && lt<1.08f){
-      { const spr_t*c=&capSpr[i]; blit(c,FBW/2-c->w/2,410-c->h/2,0,FBH,255,0,0.0f); }
-      banner_plate(FBW/2,476,820,70,sh->col);
-      text(sh->l1,FBW/2,456,3,0xFFFFFF,1,1);
-      text(sh->l2,FBW/2,488,2,mixc(sh->col,0xFFFFFF,0.35f),1,1);
-    }
+      if(z>0.985f && z<1.015f) blit(bs,px+140-bs->w/2,(int)my-bs->h/2,0,FBH,255,0,0.0f);
+      else if(z>0.05f) blit_scaled(bs,px+140,(int)my,z,255);
+    } else if(z>0.05f) blit_scaled(&sym[sh->sy],px+140,(int)my,z*2.0f,255);
+    float a=clampf((lt-0.12f)*6.0f,0,1)*clampf((per-lt)*8.0f,0,1);
+    float tx=px+280.0f, nw=lz_width(LZF_NEON_L,sh->name,58.0f,0);
+    ov_neon(LZF_NEON_L,sh->name,tx+nw*0.5f,my-54.0f,58.0f,sh->col,1.0f,0.85f,a);
+    ov_text(LZF_UI_M,sh->l1,tx,my+14.0f,28.0f,0xF8F1E2,LZ_LEFT,1.0f,a);
+    ov_text(LZF_UI_M,sh->l2,tx,my+54.0f,23.0f,lz_hot(sh->col,0.35f),LZ_LEFT,1.0f,a);
   } else if(T<17.5f){
-    /* four progressives, lit like the sign on the rail */
+    /* four progressives, each in its own neon, as on the rail */
     float u=T-14.0f;
-    dim_burst(MQH,0,FBW/2,300,artT*0.05f,24,0xC060FF,opt_limiter?90:150,0,1,0,0);
-    { const spr_t*c=&capSpr[7]; blit(c,FBW/2-c->w/2,114-c->h/2,0,FBH,255,0,0.0f); }
+    ov_neon(LZF_NEON_M,"4 PROGRESSIVE JACKPOTS",FBW*0.5f,my-124.0f,38.0f,LZ_HONEY,1.0f,0.8f,1.0f);
     static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
     for(int k=0;k<NJP;k++){
       float d=clampf((u-k*0.18f)*3.0f,0,1);
       if(d<=0) continue;
-      int y=178+k*96, w=seg_width(12,16,42,1)+220, x=FBW/2-w/2+(int)((1.0f-ease_back(d))*400.0f);
-      fb_rrect(x,y,w,72,12,0x000000,230);
-      neon_live(x,y,w,72,12,k==0?hue_at(artT*0.3f):TIERC[k],220);
-      text(JN[k],x+20,y+26,3,mixc(TIERC[k],0xFFFFFF,0.2f),0,1);
-      seg_num(jp_value(k),x+w-18,y+15,12,16,42,k==0?0xFFF0C0:mixc(TIERC[k],0xFFFFFF,0.35f),0x2A2230,1);
+      int w=620, h=48, y=(int)my-96+k*54, x=FBW/2-w/2+(int)((1.0f-ease_back(d))*400.0f);
+      ov_panel(x,y,w,h,k==0?hue_at(artT*0.3f):TIERC[k],220);
+      ov_text(LZF_DISP_S,JN[k],x+24.0f,y+h*0.5f,26.0f,lz_hot(TIERC[k],0.3f),LZ_LEFT,1.0f,1.0f);
+      ov_number(jp_value(k),x+w-24.0f,y+h*0.5f,34.0f,LZ_RIGHT,1.0f,0.4f);
     }
   } else {
     /* the whole game in nine lines */
     float u=T-17.5f;
-    dim_burst(MQH,0,FBW/2,330,artT*0.06f,18,0xFFB030,opt_limiter?80:130,0,1,0,0);
-    fb_shade_rect(GX-8,150,GW+16,356,0x05030C,150);
-    fb_rframe(GX-8,150,GW+16,356,14,2.0f,0xFFD24A,200);
-    { const spr_t*c=&capSpr[8]; blit(c,FBW/2-c->w/2,104-c->h/2,0,FBH,255,0,0.0f); }
+    ov_panel(FBW/2-390,(int)my-128,780,256,LZ_HONEY,190);
     for(int k=0;k<9;k++){
       float d=clampf((u-k*0.12f)*4.0f,0,1);
       if(d<=0) continue;
-      int y=164+k*38, x=FBW/2+(int)((1.0f-d)*(k&1?700:-700));
-      text(FEATLINES[k],x,y,3,k&1?0x9FE8FF:0xFFFFFF,1,1);
+      float x=FBW*0.5f+(1.0f-d)*(k&1?700.0f:-700.0f);
+      ov_text(LZF_UI_M,FEATLINES[k],x,my-104.0f+k*26.0f,23.0f,k&1?LZ_HONEY:0xF8F1E2,LZ_CENTER,1.0f,1.0f);
     }
   }
-  /* always: PRESS START, pulsing */
-  { const spr_t*p=&title[TT_PRESS];
-    float pl=0.5f+0.5f*sinf(artT*4.0f);
-    blit(p,FBW/2-p->w/2,566-p->h/2,0,FBH,(int)(140+115*pl),0,0.0f);
-    float ph=fmodf(artT*0.9f,2.0f);
-    if(ph<1.0f) shine_sprite(p,FBW/2-p->w/2,566-p->h/2,0,FBH,-40.0f+ph*(p->w+100.0f),20,150,210); }
-  snprintf(b,sizeof b,"SELECT = PAY TABLE     X = MAX BET     Y = ADD CREDITS");
-  text(b,FBW/2,604,2,0xAFAFC8,1,1);
+  /* always: PRESS SPIN in cyan neon, pulsing, with where SPIN is */
+  { float pl=opt_limiter?0.6f:0.5f+0.5f*sinf(artT*4.0f);
+    const float s=58.0f, ih=34.0f, iw=lz_icon_w(ih), cy=526.0f;
+    float w=lz_width(LZF_NEON_L,"PRESS SPIN",s,0), x0=FBW*0.5f-(iw+20.0f+w)*0.5f;
+    lz_icon(x0,cy-ih*0.5f,ih,wp_mask(B_A|B_START),lz_hot(LZ_CYAN,0.3f),(int)(150+105*pl));
+    lz_neon(LZF_NEON_L,"PRESS SPIN",x0+iw+20.0f+w*0.5f,cy,s,LZ_CYAN,0.55f+0.45f*pl,0.9f); }
+  ov_text(LZF_UI_M,"WAYS  *  FREE SPINS  *  HOLD & SPIN  *  WHEEL OF 7'S  *  7 STRIKE  *  4 JACKPOTS",
+          FBW*0.5f,566.0f,22.0f,LZ_HONEY,LZ_CENTER,3.0f,1.0f);
+  { static const ovkey_t K[3]={ {B_SELECT,"PAYS",0}, {B_X,"BET MAX",1.6f}, {B_Y,"ADD CREDITS",1.6f} };
+    ov_keys(K,3,FBW*0.5f,596.0f,19.0f,0xE6DCEE,LZ_HONEY,1.0f); }
+  ov_text(LZF_UI_S,"FREE PLAY  -  FOR AMUSEMENT ONLY",FBW*0.5f,620.0f,15.0f,LZ_DIM,LZ_CENTER,2.0f,1.0f);
 }
 
 /* ═══ LUCKY 7 PICK ═════════════════════════════════════════════════
@@ -6482,7 +6718,7 @@ static void art_free(void){
   free(pkStage); pkStage=NULL;
   for(int k=0;k<NTILE;k++) spr_free(&tileSpr[k]);
   spr_free(&pkGlow);
-  free(rayAng); free(rayFall); rayAng=rayFall=NULL;
+  free_showtime();
   for(int k=0;k<NFF;k++) spr_free(&fireFade[k]);
   free_titles();
 }

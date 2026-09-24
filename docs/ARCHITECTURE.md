@@ -249,7 +249,7 @@ transition and many states key their timing off it.
 | `ST_BONUSEND` | end of pick (banner 4), `end_free_spins()` (banner 3) | 2.4 s (press after 0.7 s). Pays the pick: `award(pickTotal * pickMult)` | banner 3: `ST_IDLE`/`ST_BROKE`; banner 4: `feature_done()` |
 | `ST_PAYTABLE` | IDLE + SELECT | three cached pages; SELECT flips page, any other press leaves (after 0.3 s) | `ST_IDLE` |
 | `ST_BROKE` | `after_result` / free-spins end with credits < 10; START in IDLE with nothing affordable | START/A/Y open add credits | `ST_ADDCR` |
-| `ST_ADDCR` | IDLE + Y, BROKE | choose 100..5,000; A/START add; B/SELECT/Y cancel | `ST_IDLE` or back to `ST_BROKE` |
+| `ST_ADDCR` | IDLE + Y, BROKE | choose 100..5,000 (the stick); A/START (SPIN) add; SELECT/Y (PAYS / ADD CREDITS) cancel - B too, though the panel no longer sends it | `ST_IDLE` or back to `ST_BROKE` |
 
 ### The spin and the feature queue
 
@@ -747,8 +747,16 @@ All take screen coordinates and clip to the screen and to the current band:
 ends), `fb_rframe`, `fb_line`, `blit` (sprite, vertical clip window,
 alpha, tint), `blit_wash`, `blit_add` (additive), `blit_half`,
 `blit_scaled`, `shine_sprite`, `screen_tint`/`dim`, `vgrad`, `seg_num`
-(seven-segment readouts with ghost segments), `keycap`, `led_window`,
+(seven-segment readouts with ghost segments), `led_window`,
 `fb_moulding`, `fb_glass`, `fb_softshadow`, `text`, `text_run`, `textb`.
+The banner screens (SHOWTIME: attract, free-spins intro, bonus end, out of
+credits, ADD CREDITS) add `lounge_light` (the game dimmed and lit by three
+tabulated soft lights, one pass), `pm_blit` (glass panels and neon buttons
+baked at init by the rasteriser, kept premultiplied so their glow adds;
+`pm_capture` bakes lettering onto the glass too), `ov_panel` (live glass
+whose neon changes colour), and `ov_text` / `ov_neon` / `ov_goldstr` /
+`ov_keys` over the lounge kit's type (a prompt is a panel icon and the
+function's name, never a pad letter).
 
 The blend is one integer formula everywhere,
 `(d*(256-a) + s*a) >> 8` with red and blue sharing one multiply
@@ -771,7 +779,7 @@ frames.
   `bp_lock()`, the entry is pinned, and the composite runs unlocked.
   Strings of 40 characters or more are not drawn at all.
 - Baked titles: `bake_title()` renders a caption once into a sprite with
-  outline, glow and bevel (`title[TT_*]`, `bigdig[]`, `capSpr[]`), drawn
+  outline, glow and bevel (`title[TT_LOGO]`, `title[TT_PICK]`), drawn
   with `blit`/`blit_scaled`.
 
 ### Cached full frames
