@@ -412,18 +412,21 @@ timings on the Pi are the real per-frame cost without RetroArch.
 
 ## 9. Backups
 
-State of the copies after the v3.0.1 deploy on 2026-09-23:
+State of the copies after the v3.1.0 deploy (the lounge look) on 2026-09-24:
 
 | where | what | status |
 |---|---|---|
-| `C:\path\to\Wild7s` | the git repo: v2.2 baseline, the 7 feature branches, integration, docs | **current**; no git remote is configured |
-| `~/Wild7s` on the Pi | the tree the live core was built from | current as of the last deploy |
+| `C:\path\to\Wild7s` | the git repo, all branches and history | **current** |
+| GitHub `cael-beese/wild-7s`, branch `main` | the public source, tags `v3.0.1`, `v3.1.0` | **current** |
+| `~/Wild7s` on the Pi | the tree the live core was built from (v3.1.0) | current |
+| `~/Wild7s-v3.0.1` on the Pi | the v3.0.1 tree, with its built core | rollback copy |
 | `~/Wild7s-v2.2` on the Pi | the v2.2 tree | rollback copy |
+| `~/RetroPie/roms/ports/wild7/wild7-source.tar.gz` (stick) | v3.1.0 source (`git archive` of the deployed commit), with `README.md` and `docs/` beside it | current |
+| `~/RetroPie/roms/ports/wild7/wild7-source-v3.0.1.tar.gz` (stick) | v3.0.1 source | rollback copy |
 | `~/RetroPie/roms/ports/wild7/wild7-source-v2.2.tar.gz` (stick) | v2.2 source | rollback copy |
-| `~/RetroPie/roms/ports/wild7/wild7-source.tar.gz` (stick) | v3.0.1 source (`git archive` of the deployed commit), with `README.md` and `docs/` beside it | current |
-| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.bundle` | the whole git repo, every branch and all history (`git bundle --all`) | **current**; restore with `git clone <bundle> Wild7s` |
-| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.tar.gz` | source tarball of the deployed commit | current |
-| `<cloud-drive>\Wild7s` | mirror of the tree | refreshed to v3.0.1 on 2026-09-23 (files added and overwritten; nothing removed) |
+| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.bundle` | the whole git repo as of v3.0.1 (`git bundle --all`) | **not refreshed for v3.1.0** (the drive was not mounted); restore with `git clone <bundle> Wild7s` |
+| `<cloud-drive>\Wild7s-v3.0.1-2026-09-23.tar.gz` | source tarball of the v3.0.1 commit | v3.0.1 |
+| `<cloud-drive>\Wild7s` | mirror of the tree | v3.0.1 (2026-09-23) |
 | `<cloud-drive>\Wild7s-v2.3-2026-09-06.tar.gz` | dated tarball | 2026-09-06, version 2 era |
 | `<usb-disk>\Wild7s-v2.0-<date>.tar.gz` | tarball on the external USB disk | v2.0; the disk was not attached when this was written, so not re-checked |
 
@@ -441,9 +444,22 @@ way as the deploy archive (`git archive --format=tar.gz HEAD`), copied with
 
 ---
 
-## 10. Rolling back to v2.2
+## 10. Rolling back
 
-Version 2.2 is a complete, working game (5x5 ways, free spins with the
+**To v3.0.1** (the look before the lounge reskin, same game and maths): the
+Pi keeps that tree with its built core, and its installer puts the CRT
+shader back as it was:
+
+```
+cd ~/Wild7s-v3.0.1 && sudo bash ./install-retropie.sh
+```
+
+then quit any running game (section 4) and start WILD 7's again. Forward
+again: `cd ~/Wild7s && sudo bash ./install-retropie.sh`. v3.0.1 does not
+read `wild7_panel.cfg` and uses the RetroPad letters; don't load a save
+state made by the other version.
+
+**To v2.2.** Version 2.2 is a complete, working game (5x5 ways, free spins with the
 multiplier, pick bonus, four bet-multiple jackpots; no HOLD & SPIN, WHEEL,
 7 STRIKE, GAMBLE, music or threaded renderer).
 

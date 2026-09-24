@@ -7054,7 +7054,7 @@ unsigned retro_api_version(void){ return RETRO_API_VERSION; }
 void retro_get_system_info(struct retro_system_info*info){
   memset(info,0,sizeof(*info));
   info->library_name     = "Wild 7's";
-  info->library_version  = "3.0.1";
+  info->library_version  = "3.1.0";
   info->valid_extensions = "w7|wild7";
   info->need_fullpath    = false;
   info->block_extract    = true;
