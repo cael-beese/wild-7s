@@ -114,6 +114,33 @@ full-screen state can join that test.)
   module's `*_sim_play()` (same functions as the game, never a copy).
 - Test hooks (`WILD7_AUTOPILOT`, `WILD7_FORCE`) never touch normal play.
 
+## The lounge look, and the controls rule
+
+WILD 7's shares Beese's Poker Lounge's look (docs/ARCHITECTURE.md 9a).
+New art should use the kit in `src/w7_lounge.c` and follow the base
+cabinet (search `lzReady`): dark glass with a neon edge, gold Bungee
+numbers and titles, Barlow labels (panel captions in small spaced
+capitals), neon signs in Tilt Neon, the palette `LZ_*`.
+
+- Kit functions come in two kinds. `lz_glass`, `lz_well`, `lz_button`,
+  `lz_bake_dome`, `lz_reel_frame`, `lz_paint_room` and anything on an
+  `LCanvas` are **build time**: they allocate and paint the whole frame -
+  call them from code that runs once, never from a draw. `lz_text*`,
+  `lz_neon`, `lz_gold`, `lz_readout`, `lz_icon`, `lz_dot`, `lz_add_tint`,
+  `lz_bulbs_row` are draw code and keep the render contract.
+- Text is cached per string and size, so per-frame text is cheap after its
+  first frame; a string that changes every frame (a count-up) is
+  rasterised every frame - keep those few and small.
+- Bungee is wider than the old 5x7 blocks: lay out `textb` captions with
+  `textb_w()`, kit text with `lz_width()`.
+
+**Never show RetroPad letters** (A, B, X, Y, L, R, D-PAD): the cabinet's
+panel is unlabelled. Name the function as the deck does - SPIN, BET MAX,
+PAYS, ADD CREDITS, BET LESS, BET MORE, the STICK - and put the panel icon
+beside it: `lz_icon(x, y, h, wp_mask(B_A|B_START), col, 255)` lights where
+SPIN is. The panel sends no B (`B_B`): a path that needs one must have
+another button (docs/ARCHITECTURE.md 2a).
+
 ## Style
 
 Match the existing file: C99, two-space indent, comments that explain

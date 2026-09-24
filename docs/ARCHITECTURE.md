@@ -37,6 +37,11 @@ Contents
 | `src/w7_hold.c` / `.h` | HOLD & SPIN (LUCKY COIN symbol). |
 | `src/w7_wheel.c` / `.h` | WHEEL OF 7's (WHEEL symbol). |
 | `src/w7_extra.c` / `.h` | 7 STRIKE wild storm and the GAMBLE. |
+| `src/w7_lounge.c` | the lounge look shared with Beese's Poker Lounge (section 9a): the embedded fonts, neon / gold / plain text and its string cache, glass panels, neon buttons, the room, bulbs, the bee, the panel icon; `text()`, `textb()`, `bake_title()` and `seg_num()` set their type through it. |
+| `src/w7_raster.c` / `.h`, `src/w7_lart.c` / `.h` | the poker game's CPU vector rasteriser (SDF shapes, paints, blur) and its motifs (bee, brass, honeycomb, suit pips), names prefixed `l`/`L` to fit the unity build. Start-up only. |
+| `src/w7_panel.c` | the buttons by panel position, LEARN PANEL (`ST_LEARN`), the CONTROLS page, `wild7_panel.cfg` (section 2a). |
+| `src/third_party/stb_truetype.h` | Sean Barrett's font rasteriser (public domain / MIT), static in the core. |
+| `assets/fonts/` | Barlow Condensed, Bungee, Tilt Neon, Neonderthaw (SIL OFL, licences beside them), embedded in the core with `.incbin`; `W7_ASSETS` (the Makefile) is their absolute path. |
 | `src/libretro.h` | vendored libretro API header (the Makefile downloads it only if missing). |
 | `src/sim.c` | RTP simulator `w7sim`; `#include "wild7_libretro.c"`. |
 | `tools/w7shot.c` | headless host `w7shot`: runs `retro_run()`, writes PNG/PPM frames, a WAV, frame hashes and timings; includes the core. |
@@ -62,6 +67,9 @@ wild7_libretro.c
   #include "w7_thread.c"          <- the pool needs only FBH and the clip
   callbacks, opt_*, dbg_* test hooks, frnd()/irnd(), colour helpers, FONT
   sprite canvas (cv_*), framebuffer primitives (fb_*, blit*), text, textb
+  #include "w7_lounge.c"           <- the lounge kit (it includes w7_raster.c,
+                                      w7_lart.c, stb_truetype.h); needs the
+                                      primitives, and text() calls into it
   symbol art (materials, cv_medal, art_*), add_contour, bake_shadow,
     make_streak, build_sprites
   PAY, SCATPAY, CNT, STK, build_strips
@@ -73,7 +81,9 @@ wild7_libretro.c
   #include "w7_audio.c"            <- needs game_t (music_auto reads G);
                                       update() below calls sfx_*
   snapshot_grid, flood, add_win, score_ways, evaluate, start_spin,
-  pick bonus, input, award, feature queue, force hooks
+  pick bonus, enum B_*
+  #include "w7_panel.c"            <- needs B_* and G; poll_input() calls it
+  input, award, feature queue, force hooks
   update()
   cabinet chrome, titles, backdrop painting, draw_reels, draw_features,
   draw_meters, frame_cache, pay table pages, overlays, marquee, art_free
@@ -163,8 +173,50 @@ frames, not wall time. Everything that animates is driven from `update()`.
 panel flip); the reel motion for all five reels; then the `switch` on
 `G.state`.
 
-Input: `poll_input()` builds a bit mask (`B_UP`..`B_R`) from pad 0.
-`hit(m)` is a rising edge, `anyhit()` is any new press.
+Input: `poll_input()` builds a bit mask (`B_UP`..`B_R`) from pad 0 through
+`wp_read()` (section 2a). `hit(m)` is a rising edge, `anyhit()` is any new
+press.
+
+### 2a. Controls by panel position - w7_panel.c
+
+The cabinet's panel has two sides, each a stick, two rows of three
+buttons, SELECT and START. WILD 7's lays its deck out on player 1's side
+**by position**, as a slot deck reads, and every label on screen says
+where a button is rather than naming a RetroPad letter:
+
+```
+top:     PAYS (B_SELECT)          BET LESS (B_L)     BET MORE (B_R)
+bottom:  ADD CREDITS (B_Y)        BET MAX (B_X)      SPIN (B_A)
+         SELECT = PAYS (B_SELECT)                    START = SPIN (B_START)
+```
+
+`PNL_DOES[]` is that table (position -> game bit), `PNL_LABEL[]` the
+names. `wpPad[]` is which RetroPad button RetroArch reports for each
+position; `wp_read()` reads all sixteen RetroPad ids into `wpNow` and sets
+each position's game bit when its button is down (the d-pad, the stick,
+passes through). `wp_mask(bits)` gives the panel icon's lit positions for
+any game bits, `wp_pos_down(p)` whether a position is held.
+
+The wiring is learned. `wpPad[]` starts as the guess `PNL_GUESS[]` -
+RetroPie's usual 6-button layout, Y X L over B A R, the same guess as the
+poker game - and LEARN PANEL (`ST_LEARN`, `wp_learn_update` /
+`wp_learn_draw`) asks for each of the eight positions in turn, reading raw
+presses from `wpNow`. It runs by itself on the first start
+(`wp_first_start()`, from `retro_load_game`, when the file says it was never
+offered; no press within 12 s on the first question gives up quietly) and
+from the CONTROLS page by holding one button 5 s. The result goes to
+`wild7_panel.cfg` in RetroArch's save directory (`wp_save`: temporary
+file, rename) with `learned`, `wizard_offered`, `controls_shown`.
+
+The CONTROLS page is the pay table's fourth page (`G.ptPage == 3`,
+`wp_controls_draw`): player 1's side drawn large, each button lit while
+held; only SPIN / START leave it (every other button is being shown), and
+90 s without a press returns to attract. The first player to leave the
+attract loop is shown it once (`controls_shown`).
+
+`WILD7_RAWPAD=1` (w7shot sets it) reads the RetroPad letters directly as
+before, never reads or writes the file and never offers the wizard, so
+scripted runs keep their meaning.
 
 ---
 
@@ -758,21 +810,31 @@ frames.
 
 ### Text
 
-- `text(s, x, y, px, col, align, shadow)` - the 5x7 `FONT[]` as solid
-  blocks of `px` pixels (upper case only; `a..e` are arrows, multiply and a
-  dot). Auto-shrinks until the string fits the screen width.
-- `textb(s, x, y, px, stops, nstops, align)` - "bubble" display type: every
-  set font pixel is stamped as an antialiased disc and welded to neighbours
-  with capsules (`tb_stamp`, `tb_cap`), giving two coverage masks (fill and
-  outline) that are composited as shadow, dark outline and gradient body.
-  Rasterising is expensive, so masks are cached in `tbc[TBC]` (16 slots,
-  LRU) keyed by string and size. Under the band renderer the cache is
-  shared: the lookup (and on a miss the rasterise) happens under
-  `bp_lock()`, the entry is pinned, and the composite runs unlocked.
-  Strings of 40 characters or more are not drawn at all.
+Every caption is set in the lounge's faces (Beese's Poker Lounge's), through
+`w7_lounge.c`; the old 5x7 `FONT[]` is only the fallback before `lz_init()`.
+The game's own calls keep their signatures and metrics - `px` is the size of
+a block of the old font, so capitals stand `7*px` tall with their tops at `y`:
+
+- `text(s, x, y, px, col, align, shadow)` and `text_run()` - Barlow
+  Condensed (`lz_compat_text`), upper case, fitted to the screen.
+- `textb(s, x, y, px, stops, nstops, align)` - the display type: Bungee
+  coverage (`lz_caption_mask`) and its outline grown by a distance
+  transform (`lz_dilate`), composited as before as shadow, dark outline and
+  the gradient body. Cached in `tbc[TBC]` (16 slots, LRU) keyed by string
+  and size; under the band renderer the lookup (and a miss's rasterise)
+  happens under `bp_lock()`, the entry is pinned, and the composite runs
+  unlocked. Strings of 40 characters or more are not drawn at all. Bungee
+  is wider than the old blocks: layout code asks `textb_w(s, px)`.
 - Baked titles: `bake_title()` renders a caption once into a sprite with
   outline, glow and bevel (`title[TT_*]`, `bigdig[]`, `capSpr[]`), drawn
-  with `blit`/`blit_scaled`.
+  with `blit`/`blit_scaled`; the letter shapes are Bungee's.
+- `seg_num()` draws a gold Bungee readout (`lz_readout`) instead of seven
+  segments.
+- The kit's own text (`lz_text`, `lz_text_ex`, `lz_neon`, `lz_gold`; section
+  9a) goes through a string cache (`lzc[LZC_N]`, 96 slots, LRU): a string at
+  a size is rasterised once into face, outline and glow masks and after
+  that only copied, whatever the colours. Same locking as `textb`. Per-glyph
+  flicker (`gpow`, the marquee sign) draws uncached.
 
 ### Cached full frames
 
@@ -875,6 +937,44 @@ The full text is in `DEVELOPING.md`. In short:
 6. Prove it with `sh tools/bandcheck.sh` (all identical).
 
 ---
+
+## 9a. The lounge look - w7_lounge.c
+
+WILD 7's shares its look with Tim's other cabinet game, Beese's Poker
+Lounge: the "neon honey lounge" - a dark plum honeycomb room, dark glass
+panels with a neon tube edge and its glow, neon-sign lettering, Bungee
+display type in cream-to-amber gold, Barlow Condensed labels, chasing
+bulbs, the bee. The poker game draws it with a GPU; here the same art is
+painted on the CPU, once, and blitted.
+
+**Start-up** (`lz_init()`, first in `retro_init()`): the four fonts are
+embedded in the core (`LZ_EMBED`, `.incbin` from `W7_ASSETS`), their
+glyphs rasterised with stb_truetype at the poker game's sizes (`LZF_*`) and
+the glow fonts' glows blurred at half resolution; the sprites (glow, hex
+glow, bulbs, the bee) are painted with the poker game's rasteriser
+(`w7_raster.c`: signed-distance shapes, paints, blur; `w7_lart.c`: the
+motifs). About 90 ms on x86.
+
+**Two kinds of function**, and the difference matters to the render
+contract:
+
+- *Build time* - `lz_glass`, `lz_well`, `lz_button`, `lz_bake_dome`,
+  `lz_reel_frame`, `lz_paint_room`, and anything on an `LCanvas`. They
+  allocate and paint the whole frame; call them from `build_*` / `paint_*`
+  code that runs once (or from a frame cache's paint), never per frame.
+- *Draw code* - `lz_text*`, `lz_neon`, `lz_gold`, `lz_readout`, `lz_icon`,
+  `lz_dot`, `lz_add_tint`, `lz_bulbs_row`: no state, every row loop clipped
+  to the band.
+
+The base cabinet uses it (search `lzReady` in `wild7_libretro.c`):
+`paint_backdrop` (the room; free spins light it in night blue),
+`paint_marquee_box`, `build_marquee` / `draw_marquee` (the "Beese's WILD
+7'S" neon sign - the lettering is drawn live so single letters can flicker
+from a hash of the clock - and bulbs chasing either side), `paint_rails`
+(glass rails, gold readouts, the CONTROLS crib by position), `glass_rail`,
+`rail_panel`, `led_window`, `paint_reel_window` (brass and honey round the
+window), `paint_deck`, `paint_button` (neon buttons with the panel icon),
+`build_dome` / `spin_dome` (the SPIN button).
 
 ## 10. Audio - w7_audio.c
 
