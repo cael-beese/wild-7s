@@ -180,22 +180,39 @@ static fxspr_t popS[NSYM][NPOP];
 /* -- titles and digits ---------------------------------------------- */
 enum { FXT_BIG,FXT_SUPER,FXT_MEGA,FXT_EPIC,
        FXT_JULT,FXT_JMEGA,FXT_JMAJOR,FXT_JMINOR,      /* in JP_* order */
-       FXT_JACKPOT,FXT_X2,FXT_X3,FXT_X4,FXT_X5,FXT_MULTUP,FXT_BADGE,NFXT };
+       FXT_JACKPOT,FXT_X2,FXT_X3,FXT_X4,FXT_X5,FXT_BADGE,NFXT };
 static fxspr_t titleS[NFXT];
 #define FXDPX 12                 /* digit sprites: bubble type at px 12 */
 static fxspr_t digS[11];         /* 0-9 and the comma                   */
 static fxspr_t trS;              /* the current transition's title      */
 
-static const uint32_t FX_SUPERG[5]={0xFFFFFF,0xFFD6F2,0xFF5CC8,0xC0147A,0x4A0430};
-static const uint32_t FX_MEGAG[5] ={0xFFFFFF,0xCFF6FF,0x48C8FF,0x1462D6,0x081C60};
-static const uint32_t FX_EPICG[6] ={0xFFFFFF,0xFFF3A0,0xFFA030,0xFF3070,0xA024D0,0x34086A};
-static const uint32_t FX_MINORG[5]={0xFFFFFF,0xC8FFF0,0x40F0C0,0x0E9A78,0x04403A};
-static const uint32_t FX_MAJORG[5]={0xFFFFFF,0xEED8FF,0xB478FF,0x6A20C8,0x280860};
-static const uint32_t FX_FIREG[5] ={0xFFFFFF,0xFFE6A0,0xFF8A30,0xE02424,0x5A0810};
+/*  The lounge look (Beese's Poker Lounge's ROYAL FLUSH / MONSTER POT):
+ *  every celebration title is gold display type - cream to amber, a
+ *  warm brown rim, its own glow - and the tiers are told apart by the
+ *  neon round them: the halo, the rays, the ring, the edge of the dark
+ *  glass panel the count sits on.  The top tiers (EPIC, ULTIMATE) run
+ *  all three of the lounge's neons, honey, magenta and cyan.          */
+static const uint32_t FX_GOLDG[5]={0xFFF8D8,0xFFE08A,0xFFC24A,0xEE9424,0xB8600E};
+static const uint32_t FX_ROSEG[5]={0xFFF6EC,0xFFDC9C,0xFFAA52,0xF2625E,0xB02A6A};   /* EPIC */
+static const uint32_t FX_PLATG[5]={0xFFFFFF,0xFFF6DA,0xFFE09A,0xE4AC4C,0x9E6C1E};   /* ULTIMATE */
 
-/* tier accents: big-win tiers 1..4, jackpot tiers in JP_* order */
-static const uint32_t BWCOL[5]={0xFFC030,0xFFC030,0xFF4FB0,0x40B8FF,0xB060FF};
-static const uint32_t JPCOL[NJP]={0x9AF0FF,0xFF5A28,0xB070FF,0x40F0C0};
+/* tier accents: big-win tiers 1..4, jackpot tiers in JP_* order; the
+   jackpot ones match the ladder's neon on the left rail */
+static const uint32_t BWCOL[5]={LZ_HONEY,LZ_HONEY,LZ_MAGENTA,LZ_CYAN,LZ_GOLD};
+static const uint32_t JPCOL[NJP]={LZ_CYAN,LZ_MAGENTA,0xFF6A4A,0x5AF4C0};
+static const uint32_t FX_NEON3[3]={LZ_HONEY,LZ_MAGENTA,LZ_CYAN};
+/* the searchlights: honey, run pale, as a lamp's beam through haze */
+#define FX_BEAM 0xFFD68Au
+/* the three neons in turn, blended: one lap per 3 units of t */
+static uint32_t fx_neon_cycle(float t){
+  float h=t-floorf(t/3.0f)*3.0f; int i=(int)h;
+  return mixc(FX_NEON3[i%3],FX_NEON3[(i+1)%3],h-i);
+}
+/* a lounge colour for a firework or a confetti flake, from 0..1 */
+static uint32_t fx_lounge_col(float u){
+  static const uint32_t C[6]={LZ_HONEY,LZ_MAGENTA,LZ_CYAN,LZ_GOLD,LZ_GREEN,0xFF7AE0};
+  return C[clampi((int)(u*6.0f),0,5)];
+}
 
 /*  Bubble type baked into a sprite.  textb() composites three passes of
  *  a cached coverage mask straight onto the screen each frame and can
@@ -207,16 +224,23 @@ static const uint32_t JPCOL[NJP]={0x9AF0FF,0xFF5A28,0xB070FF,0x40F0C0};
  *  mask for a coloured halo.  The sprite is then blitted at any scale. */
 /* the colour of a halo baked under the next fx_bake_text, 0 for none */
 static uint32_t fxHalo;
+/*  The dark rim round baked type: a warm brown rather than black, so the
+ *  gold reads as the lounge's lit brass (the poker game's text_gold).  */
+#define FX_RIM 0x2E1404
 static void fx_bake_text(fxspr_t*s,const char*str,int px,const uint32_t*st,int ns,int glowR){
   int n=(int)strlen(str);
   if(n<1 || n>=(int)sizeof(tbc[0].str)) return;
+  /* The mask is laid out at the caption's real width.  tb_render sets
+     Bungee once the lounge fonts are up, and Bungee is much wider than
+     the old 5x7 blocks, so n*6*px clipped the last letters off ("MEGI
+     JACKPO").  textb_w() is the width textb() itself lays out.        */
   for(;;){
-    int wt=n*px*6-px, pad2=2*(int)(px*0.90f+4.0f);
+    int wt=textb_w(str,px), pad2=2*(int)(px*0.90f+4.0f);
     if(px<=2) break;
     if(wt+pad2<=TBW && px*7+pad2<=TBH && wt<=FBW-24) break;
     px--;
   }
-  int adv=px*6, wtot=n*adv-px, capH=px*7;
+  int adv=px*6, wtot=textb_w(str,px), capH=px*7;
   tbcache_t*c=tb_render(str,px,n,adv,wtot,capH);
   if(!c) return;
   int bw=c->bw, bh=c->bh, pad=c->pad;
@@ -246,7 +270,7 @@ static void fx_bake_text(fxspr_t*s,const char*str,int px,const uint32_t*st,int n
     if(fxHalo && s->g) fx_over(&R,&Gc,&B,&A,fxHalo,s->g[(size_t)j*W+i]*230/255);
     if(si>=0&&si<bw&&sj>=0&&sj<bh) fx_over(&R,&Gc,&B,&A,0x000000,c->out[sj*bw+si]*170/255);
     if(li>=0&&li<bw&&lj>=0&&lj<bh){
-      fx_over(&R,&Gc,&B,&A,0x180C02,c->out[lj*bw+li]);
+      fx_over(&R,&Gc,&B,&A,FX_RIM,c->out[lj*bw+li]);
       int fa=c->fill[lj*bw+li];
       if(fa){
         float t=clampf((float)(lj-pad)/(float)(capH>1?capH-1:1),0,1);
@@ -545,6 +569,132 @@ static void fxs_add(const fxspr_t*s,int cx,int cy,uint32_t col,int alpha){
   }
 }
 
+/*  An additive mask with its top-left at (X,Y), skipping each row's
+ *  empty middle [g0,g1] when the sprite records one: a neon frame is
+ *  light round the edge of a panel and nothing across its width.     */
+static void fxs_addmask(const fxspr_t*s,int X,int Y,uint32_t col,int alpha){
+  if(!s->a||alpha<=0) return;
+  if(alpha>255) alpha=255;
+  int y0=Y, y1=Y+s->h;
+  if(!fx_clip(&y0,&y1)) return;
+  for(int y=y0;y<y1;y++){
+    int sy=y-Y, xa=s->x0[sy], xb=s->x1[sy];
+    int ha=s->g0?s->g0[sy]:1, hb=s->g1?s->g1[sy]:0;
+    if(X+xa<0) xa=-X;
+    if(X+xb>=FBW) xb=FBW-1-X;
+    const uint8_t*ar=s->a+(size_t)sy*s->w;
+    uint32_t*d=fb+(size_t)y*FBW+X;
+    for(int x=xa;x<=xb;x++){
+      if(x==ha && hb>=ha){ x=hb; continue; }
+      int m=ar[x];
+      if(m) d[x]=px_add(d[x],px_scale(col,(m*alpha)>>8));
+    }
+  }
+}
+
+/* === LOUNGE GLASS PANELS ==========================================
+ *  The dark glass plate a count sits on, with a neon tube round its edge
+ *  and the tube's glow spilling both ways (the poker game's JACKPOT PAYS
+ *  panel).  lz_glass() paints through the rasteriser and allocates, so
+ *  it is build-time only; these are baked once at init instead, as two
+ *  sprites: the glass (colour and alpha) and the neon (a white additive
+ *  mask), so one bake serves every tier's colour and fades at any
+ *  alpha.  Per frame that is one copy over the plate and one add
+ *  round its rim.                                                     */
+typedef struct { fxspr_t body, neon; int w,h,m; float r; } fxpanel_t;
+static void fx_rframe(int x,int y,int w,int h,float r,int t,uint32_t col,int alpha);
+enum { FXP_WIN, FXP_MULT, FXP_SUB, NFXP };
+static fxpanel_t fxPanel[NFXP];
+
+/* signed distance to a rounded box of half-size (hw,hh), corner radius r */
+static float fx_rr_sd(float px,float py,float hw,float hh,float r){
+  float qx=fabsf(px)-(hw-r), qy=fabsf(py)-(hh-r);
+  float ox=fmaxf(qx,0.0f), oy=fmaxf(qy,0.0f);
+  return sqrtf(ox*ox+oy*oy)+fminf(fmaxf(qx,qy),0.0f)-r;
+}
+static void fx_bake_panel(fxpanel_t*P,int w,int h,float r){
+  const int M=22;
+  int W=w+2*M, H=h+2*M;
+  P->w=w; P->h=h; P->m=M; P->r=r;
+  if(!fxs_alloc(&P->body,W,H,0) || !fxs_alloc(&P->neon,W,H,0)) return;
+  float hw=w*0.5f, hh=h*0.5f;
+  for(int j=0;j<H;j++) for(int i=0;i<W;i++){
+    float px=i+0.5f-W*0.5f, py=j+0.5f-H*0.5f;
+    float d=fx_rr_sd(px,py,hw,hh,r);
+    size_t o=(size_t)j*W+i;
+    /* the glass: plum-black, a shade lighter at the top, with a soft
+       sheen across its upper third.  Opaque, as the poker game's panels
+       read, which also makes the per-frame blit a plain copy. */
+    float cov=clampf(0.5f-d,0,1);
+    if(cov>0){
+      float v=clampf((py+hh)/(float)h,0,1);
+      uint32_t c=mixc(0x241A2C,0x0A070D,v);
+      if(v<0.38f) c=mixc(c,0x3C2E46,(0.38f-v)/0.38f*0.30f);
+      P->body.c[o]=c;
+      P->body.a[o]=(uint8_t)(cov*255.0f+0.5f);
+    }
+    /* the neon: a tube 1.5 px inside the edge, and its glow, wider and
+       brighter outside than in, fading to nothing at the margin */
+    float tube=clampf(2.3f-fabsf(d+1.5f),0,1);
+    float glow=d>0 ? 0.85f*expf(-d/7.0f)*clampf(1.0f-d/(float)M,0,1)
+                   : 0.45f*expf(d/5.0f);
+    float v=fmaxf(tube,glow);
+    P->neon.a[o]=(uint8_t)(v*255.0f+0.5f);
+    P->neon.c[o]=0xFFFFFF;
+  }
+  fxs_spans(&P->body);
+  fxs_spans(&P->neon);
+  /* the neon's dark middle, per row, so the add can step over it */
+  P->neon.g0=(int16_t*)malloc((size_t)H*sizeof(int16_t));
+  P->neon.g1=(int16_t*)malloc((size_t)H*sizeof(int16_t));
+  if(P->neon.g0 && P->neon.g1) for(int j=0;j<H;j++){
+    const uint8_t*row=P->neon.a+(size_t)j*W;
+    int a=W/2, b=W/2;
+    if(row[a]){ P->neon.g0[j]=1; P->neon.g1[j]=0; continue; }
+    while(a>0 && !row[a-1]) a--;
+    while(b<W-1 && !row[b+1]) b++;
+    P->neon.g0[j]=(int16_t)a; P->neon.g1[j]=(int16_t)b;
+  }
+}
+/* the panel with its glass at (x,y,w,h), its tube in `neon` */
+static void fx_panel_draw(const fxpanel_t*P,int x,int y,uint32_t neon,int alpha){
+  if(!P->body.c||alpha<=0) return;
+  fxs_blit1(&P->body,x-P->m,y-P->m,alpha);
+  fxs_addmask(&P->neon,x-P->m,y-P->m,neon,alpha);
+  /* the tube's pastel-hot core, as a neon sign's glass is */
+  fx_rframe(x+1,y+1,P->w-2,P->h-2,P->r-1.0f,2,lz_hot(neon,0.62f),alpha*3/4);
+}
+
+/* === LOUNGE TYPE ================================================== */
+/* small spaced capitals (Barlow), centred on cx with the line top at y */
+static void fx_caption(const char*s,float cx,float y,float size,uint32_t col,float op,float spacing){
+  if(op<=0.02f) return;
+  lz_style st;
+  memset(&st,0,sizeof st);
+  st.color=col; st.align=LZ_CENTER; st.spacing=spacing;
+  st.shadow=0x000000; st.shadow_k=0.85f;
+  st.opacity=clampf(op,0,1);
+  lz_text_ex(LZF_UI_M,s,cx,y,size,&st);
+}
+/* a neon sign (Tilt Neon) centred on (cx,cy), fading with op: the tube
+   runs pastel-hot and the halo is the tube's colour */
+static void fx_neon_sign(const char*s,float cx,float cy,float size,uint32_t tube,float op){
+  if(op<=0.02f) return;
+  lz_style st;
+  memset(&st,0,sizeof st);
+  st.color=lz_hot(tube,0.62f); st.align=LZ_CENTER;
+  st.glow=tube; st.glow_k=0.95f;
+  st.shadow=0x000000; st.shadow_k=0.9f;     /* the wall behind the sign */
+  st.opacity=clampf(op,0,1);
+  lz_text_ex(size>40.0f?LZF_NEON_L:LZF_NEON_M,s,cx,cy-size*0.5f,size,&st);
+}
+/* PRESS ANY BUTTON prompts: Barlow, widely spaced, breathing softly (a
+   steady glow under the limiter, which forbids the old blink) */
+static void fx_prompt(const char*s,float y,float t){
+  float op=opt_limiter?0.9f:0.62f+0.38f*sinf(t*4.2f);
+  fx_caption(s,FBW*0.5f,y,26.0f,LZ_IVORY,op,4.0f);
+}
+
 /* === DRAW HELPERS ================================================= */
 static void fx_glow_ell(int cx,int cy,int rx,int ry,uint32_t col,int alpha,int blend){
   if(!glowT||rx<1||ry<1||alpha<=0) return;
@@ -639,33 +789,99 @@ static void fx_rays(int cx,int cy,int r0,int r1,int n,float ang,uint32_t col,int
 
 /*  The stage every celebration plays on, in ONE pass over the frame:
  *  an optional uniform dim, a darker elliptical plate behind the title,
- *  and a god-ray burst with a glow core.  Drawn as four separate effects
- *  that was four full-screen read-modify-writes, which is most of what a
- *  frame costs.  Here the darkening factor and the ray light are worked
- *  out once per 4x2 block and applied as one multiply and one add; with
- *  no uniform dim only the ellipse that is actually lit is visited.   */
+ *  a god-ray burst with a glow core, and the lounge's searchlights - two
+ *  soft beams swinging down from the top corners onto the title.  Drawn
+ *  as separate effects that was several full-screen read-modify-writes,
+ *  which is most of what a frame costs.  Here the darkening factor and
+ *  the light are worked out once per 4x2 block and applied as one
+ *  multiply and one add; with no uniform dim only the spans that are
+ *  actually lit (the ellipse and the two cones) are visited.          */
 typedef struct {
   int cx,cy;                       /* burst and plate centre            */
   int dim;                         /* uniform darkening, 0..255         */
   int vrx,vry,vig;                 /* plate radii, its extra darkening  */
-  int r0,r1,n,alpha,rainbow,core;  /* rays, as fx_rays_ex               */
+  int r0,r1,n,alpha,rainbow,core;  /* rays, as fx_rays_ex; rainbow 2 =
+                                      the lounge's three neons in turn  */
   float ang,ysc;
   uint32_t col;
+  int beam;                        /* searchlight strength, 0 = none    */
+  float bt;                        /* the searchlights' sweep clock, s  */
+  uint32_t bcol[2];                /* left and right beam colours       */
+  int hx0,hx1,hy0,hy1;             /* an opaque panel on top: its rows
+                                      and columns (4-aligned) are left
+                                      alone, 0,0 for none             */
 } fxstage_t;
+
+/* one searchlight: origin, axis, its normal, tan of the half angle,
+   reach, and the two edges' slopes (dx per dy) for the row spans      */
+typedef struct { float ox,oy,dx,dy,nx,ny,tw,L,s1,s2; int ok; uint32_t col; } fxbeam_t;
+
+static void fx_beam_setup(fxbeam_t*b,float ox,float oy,float ax,float ay,uint32_t col){
+  float dx=ax-ox, dy=ay-oy, l=sqrtf(dx*dx+dy*dy);
+  memset(b,0,sizeof *b);
+  if(l<1.0f) return;
+  b->ox=ox; b->oy=oy; b->dx=dx/l; b->dy=dy/l; b->nx=-b->dy; b->ny=b->dx;
+  b->tw=0.12f; b->L=l*1.05f; b->col=col;
+  /* the cone's edges, the axis turned by +-atan(tw); both point down */
+  float c=1.0f/sqrtf(1.0f+b->tw*b->tw), s=b->tw*c;
+  float e1x=b->dx*c-b->dy*s, e1y=b->dx*s+b->dy*c;
+  float e2x=b->dx*c+b->dy*s, e2y=-b->dx*s+b->dy*c;
+  if(e1y<0.05f||e2y<0.05f) return;
+  b->s1=e1x/e1y; b->s2=e2x/e2y; b->ok=1;
+}
+/*  The searchlights' light at (xs,yc): the colour to add (*out) and the
+ *  strength it takes from what is under it (returned).  Each cone is a
+ *  flat top with soft edges, so it reads as a beam and not a smudge,
+ *  with a brighter core down its axis and a fade along its reach.  A
+ *  point outside a cone's columns on this row [bx0,bx1) skips it.    */
+static int fx_beam_light(const fxbeam_t*bm,int nb,const int*bx0,const int*bx1,
+                         float xs,float yc,int bA,uint32_t*out){
+  uint32_t c=0; int D=0;
+  for(int i=0;i<nb;i++){
+    if(xs<bx0[i] || xs>=bx1[i]) continue;
+    const fxbeam_t*b=&bm[i];
+    float px=xs-b->ox, py=yc-b->oy;
+    float al=px*b->dx+py*b->dy;
+    if(al<=1.0f || al>=b->L) continue;
+    float qq=(px*b->nx+py*b->ny)/(al*b->tw);
+    if(qq<=-1.0f || qq>=1.0f) continue;
+    float q2=qq*qq, e=1.0f-q2*q2, core=1.0f-q2;
+    core*=core; core*=core;
+    int v=(int)((0.62f*e+0.38f*core)*(1.0f-0.75f*al/b->L)*bA);
+    if(v>2){ c=px_add(c,px_scale(b->col,v)); D+=v; }
+  }
+  *out=c;
+  return D;
+}
 
 static void fx_stage_draw(const fxstage_t*s){
   int rays=(s->alpha>0||s->core>0)&&rayA&&s->r1>=8&&s->n>0;
   int vig=s->vig>0&&s->vrx>0&&s->vry>0;
   int dimk=clampi(s->dim,0,255);
-  if(!rays&&!vig&&!dimk) return;
+  fxbeam_t bm[2]; int nb=0;
+  if(s->beam>0){
+    /* the lights swing slowly and out of step, as if worked by hand */
+    float sw=sinf(s->bt*0.55f), sw2=sinf(s->bt*0.47f+2.1f);
+    fxbeam_t l, r;
+    fx_beam_setup(&l,70.0f,-220.0f,s->cx-120.0f+130.0f*sw,s->cy+70.0f,s->bcol[0]);
+    fx_beam_setup(&r,FBW-70.0f,-220.0f,s->cx+120.0f+130.0f*sw2,s->cy+70.0f,s->bcol[1]);
+    if(l.ok) bm[nb++]=l;
+    if(r.ok) bm[nb++]=r;
+  }
+  if(!rays&&!vig&&!dimk&&!nb) return;
   int ry=(int)(s->r1*s->ysc); if(ry<4) ry=4;
-  /* the rows and, per row, the columns anything happens in */
+  /* the rows anything happens in */
   int y0=0, y1=FBH;
   if(!dimk){
     int ey=0;
     if(rays) ey=ry;
     if(vig && s->vry>ey) ey=s->vry;
     y0=s->cy-ey; y1=s->cy+ey;
+    for(int i=0;i<nb;i++){
+      int by=(int)(bm[i].oy+bm[i].L*bm[i].dy)+8;
+      if(y0>0) y0=0;
+      if(by>y1) y1=by;
+    }
   }
   if(!fx_clip(&y0,&y1)) return;
   uint8_t prof[1024]; uint32_t pc[1024]; int rl[256], cl[256];
@@ -679,7 +895,7 @@ static void fx_stage_draw(const fxstage_t*s){
       v=v*v*(3.0f-2.0f*v);
       if(k&1) v*=0.55f;
       prof[a]=(uint8_t)(v*255.0f);
-      pc[a]=s->rainbow?fx_hue((float)k/fn+s->ang*0.05f):s->col;
+      pc[a]=s->rainbow==2?FX_NEON3[k%3]:s->rainbow?fx_hue((float)k/fn+s->ang*0.05f):s->col;
     }
     rot=((int)floorf(s->ang*(1024.0f/TAU)))&1023;
     float rin=(float)s->r0/(float)s->r1;
@@ -692,23 +908,69 @@ static void fx_stage_draw(const fxstage_t*s){
     }
     rsx=(half<<16)/s->r1; rsy=(half<<16)/ry;
   }
+  int bA=clampi(s->beam,0,255);
   float irx2=vig?1.0f/((float)s->vrx*s->vrx):0, iry2=vig?1.0f/((float)s->vry*s->vry):0;
   /* per-pixel lanes, refilled every other row from one sample per 4x2
-     block: the rays and the plate are soft, and the apply loop below is
-     then a plain lane-wise multiply-add the compiler can vectorise */
+     block: the light and the plate are soft, and the apply loop below is
+     then a plain lane-wise multiply-add the compiler can vectorise.  A
+     row pair works on up to three spans (the ellipse and the cones),
+     4-aligned and merged where they meet. */
   uint32_t kx[FBW], cx[FBW];
-  int xa=0, xb=FBW;
+  int sp[6][2], ns=0, bx0[2]={1,1}, bx1[2]={0,0}, bdv=0;
+  uint32_t bc=0;
   for(int y=y0;y<y1;y++){
     if(y==y0 || !(y&1)){
-      float dy=(float)(y+1-s->cy);
-      if(!dimk){
+      float yc=(float)(y+1), dy=yc-s->cy;
+      /* each cone's columns on this pair of rows; a block outside them
+         skips that beam's arithmetic */
+      for(int i=0;i<nb;i++){
+        float t=yc-bm[i].oy;
+        bx0[i]=1; bx1[i]=0;
+        if(t>bm[i].L*bm[i].dy+8.0f) continue;
+        float a=bm[i].ox+t*bm[i].s1, b=bm[i].ox+t*bm[i].s2;
+        if(a>b){ float q=a; a=b; b=q; }
+        bx0[i]=(int)fmaxf(a,-8.0f)-4; bx1[i]=(int)fminf(b,FBW+8.0f)+8;
+      }
+      ns=0;
+      if(dimk){ sp[0][0]=0; sp[0][1]=FBW; ns=1; }
+      else {
         /* the widest chord of the lit ellipses on this pair of rows */
-        float w=0;
+        float w=-1.0f;
         if(rays && fabsf(dy)<ry){ float q=dy/ry; w=s->r1*sqrtf(1.0f-q*q); }
         if(vig && fabsf(dy)<s->vry){ float q=dy/s->vry, v=s->vrx*sqrtf(1.0f-q*q); if(v>w) w=v; }
-        xa=(s->cx-(int)w-4)&~3; xb=(s->cx+(int)w+8)&~3;
-        if(xa<0) xa=0;
-        if(xb>FBW) xb=FBW;
+        int iv[3][2], ni=0;
+        if(w>=0){ iv[ni][0]=s->cx-(int)w-4; iv[ni][1]=s->cx+(int)w+8; ni++; }
+        for(int i=0;i<nb;i++)
+          if(bx1[i]>bx0[i]){ iv[ni][0]=bx0[i]; iv[ni][1]=bx1[i]; ni++; }
+        /* align, clamp, sort and merge */
+        for(int i=0;i<ni;i++){
+          int a=iv[i][0]&~3, b=(iv[i][1]+3)&~3;
+          if(a<0) a=0;
+          if(b>FBW) b=FBW;
+          if(a>=b) continue;
+          int k=ns;
+          while(k>0 && sp[k-1][0]>a){ sp[k][0]=sp[k-1][0]; sp[k][1]=sp[k-1][1]; k--; }
+          sp[k][0]=a; sp[k][1]=b; ns++;
+        }
+        int m=0;
+        for(int i=0;i<ns;i++){
+          if(m && sp[i][0]<=sp[m-1][1]){ if(sp[i][1]>sp[m-1][1]) sp[m-1][1]=sp[i][1]; }
+          else { sp[m][0]=sp[i][0]; sp[m][1]=sp[i][1]; m++; }
+        }
+        ns=m;
+      }
+      /* an opaque panel drawn over the stage hides whatever the stage
+         would light under it: cut its straight-sided rows out */
+      if(s->hx1>s->hx0 && y>=s->hy0 && y+1<s->hy1){
+        int m=0, t[6][2];
+        for(int i=0;i<ns;i++){
+          int a=sp[i][0], b=sp[i][1];
+          if(b<=s->hx0 || a>=s->hx1){ t[m][0]=a; t[m][1]=b; m++; continue; }
+          if(a<s->hx0){ t[m][0]=a; t[m][1]=s->hx0; m++; }
+          if(b>s->hx1){ t[m][0]=s->hx1; t[m][1]=b; m++; }
+        }
+        for(int i=0;i<m;i++){ sp[i][0]=t[i][0]; sp[i][1]=t[i][1]; }
+        ns=m;
       }
       float vy=vig?1.0f-dy*dy*iry2:0.0f;
       const uint16_t*ar=NULL; const uint8_t*rr=NULL;
@@ -716,14 +978,22 @@ static void fx_stage_draw(const fxstage_t*s){
         int ty=half+(((y-s->cy)*rsy)>>16);
         if((unsigned)ty<RYS){ ar=rayA+(size_t)ty*RYS; rr=rayR+(size_t)ty*RYS; }
       }
-      for(int x=xa;x<xb;x+=4){
+      for(int q=0;q<ns;q++) for(int x=sp[q][0];x<sp[q][1];x+=4){
         int D=dimk, xs=x+2;
         if(vy>0){
           float dx=(float)(xs-s->cx), e=vy-dx*dx*irx2;
           if(e>0) D+=(int)(e*e*s->vig);
         }
+        /* the searchlights mix toward their colour rather than add: the
+           light takes the room it needs from the darkening, so a beam
+           shows outside the plate too, where nothing else is dimmed.
+           Softer still than the rays, a beam's light is worked out once
+           per 8x2 and shared by the two 4-blocks in it. */
+        if(nb && (!(x&7) || x==sp[q][0]))
+          bdv=fx_beam_light(bm,nb,bx0,bx1,(float)((x&~7)+4),yc,bA,&bc);
+        uint32_t c=bc;
+        D+=bdv;
         int k=256-(D>255?255:D);
-        uint32_t c=0;
         if(rr){
           int ix=half+(((xs-s->cx)*rsx)>>16);
           if((unsigned)ix<RYS){
@@ -731,19 +1001,19 @@ static void fx_stage_draw(const fxstage_t*s){
             if(r!=255){
               int ai=(ar[ix]+rot)&1023;
               int v=((prof[ai]*rl[r])>>8)+cl[r];
-              if(v>2){
-                c=px_scale(pc[ai],v>256?256:v);
-                /* the light may fill only the headroom the darkening
-                   left, so the per-pixel add below can never carry */
-                int hr=255-((255*k)>>8);
-                int cr=(c>>16)&255, cg=(c>>8)&255, cbb=c&255;
-                if(cr>hr) cr=hr;
-                if(cg>hr) cg=hr;
-                if(cbb>hr) cbb=hr;
-                c=RGB(cr,cg,cbb);
-              }
+              if(v>2) c=px_add(c,px_scale(pc[ai],v>256?256:v));
             }
           }
+        }
+        if(c){
+          /* the light may fill only the headroom the darkening left, so
+             the per-pixel add below can never carry */
+          int hr=255-((255*k)>>8);
+          int cr=(c>>16)&255, cg=(c>>8)&255, cbb=c&255;
+          if(cr>hr) cr=hr;
+          if(cg>hr) cg=hr;
+          if(cbb>hr) cbb=hr;
+          c=RGB(cr,cg,cbb);
         }
         kx[x]=kx[x+1]=kx[x+2]=kx[x+3]=(uint32_t)k;
         cx[x]=cx[x+1]=cx[x+2]=cx[x+3]=c;
@@ -752,9 +1022,12 @@ static void fx_stage_draw(const fxstage_t*s){
     /* scale by k/256 and add the light: the scaled channel plus its
        clamped light never exceeds 255, so no saturation is needed */
     uint32_t*d=fb+(size_t)y*FBW;
-    for(int x=xa;x<xb;x++){
-      uint32_t v=d[x], k=kx[x];
-      d[x]=(((((v&0xFF00FFu)*k)>>8)&0xFF00FFu)|((((v&0x00FF00u)*k)>>8)&0x00FF00u))+cx[x];
+    for(int q=0;q<ns;q++){
+      int xa=sp[q][0], xb=sp[q][1];
+      for(int x=xa;x<xb;x++){
+        uint32_t v=d[x], k=kx[x];
+        d[x]=(((((v&0xFF00FFu)*k)>>8)&0xFF00FFu)|((((v&0x00FF00u)*k)>>8)&0x00FF00u))+cx[x];
+      }
     }
   }
 }
@@ -910,22 +1183,43 @@ static void fx_coin(int cx,int cy,int dia,float spin,int alpha){
   fxs_blit(s,cx-s->w*0.5f,cy-s->h*0.5f,1.0f,alpha,0,FX_NOSHINE);
 }
 
-/* width of a number drawn by fx_number, in pixels */
+/*  Numbers are set from the baked digit sprites, each advancing by its
+ *  own width (tw, the glyph's advance in the display face) plus a little
+ *  tracking.  The old fixed 6*px pitch was the 5x7 font's, and Bungee's
+ *  digits and comma are not that wide.                                */
+#define FX_TRACK 0.35f           /* extra space between digits, in px units */
 static float fx_number_w(const char*b,float sc){
-  float px=FXDPX*sc, w=0; int n=(int)strlen(b);
-  for(int i=0;i<n;i++) w += (b[i]==',')?2.4f*px:6.0f*px;
-  return n?w-px:0;
+  float w=0; int n=0;
+  for(int i=0;b[i];i++,n++) w += digS[b[i]==','?10:b[i]-'0'].tw*sc;
+  return n?w+(n-1)*FX_TRACK*FXDPX*sc:0;
 }
 static void fx_number(long long v,float cx,float y,float sc,int alpha,int white){
   char b[40];
   commas(b,sizeof b,v<0?0:v);
-  float px=FXDPX*sc, pen=cx-fx_number_w(b,sc)*0.5f;
+  float pen=cx-fx_number_w(b,sc)*0.5f;
   for(int i=0;b[i];i++){
-    int comma=(b[i]==',');
-    const fxspr_t*s=comma?&digS[10]:&digS[b[i]-'0'];
-    float gx=comma?pen-1.3f*px:pen;
-    fxs_blit(s,gx-s->ox*sc,y-s->oy*sc,sc,alpha,white,FX_NOSHINE);
-    pen += comma?2.4f*px:6.0f*px;
+    const fxspr_t*s=&digS[b[i]==','?10:b[i]-'0'];
+    fxs_blit(s,pen-s->ox*sc,y-s->oy*sc,sc,alpha,white,FX_NOSHINE);
+    pen += s->tw*sc+FX_TRACK*FXDPX*sc;
+  }
+}
+/* the scale that sets v at `sc`, or smaller if it would be wider than maxw */
+static float fx_number_fit(long long v,float sc,float maxw){
+  char b[40];
+  commas(b,sizeof b,v<0?0:v);
+  float w=fx_number_w(b,sc);
+  return w>maxw ? sc*maxw/w : sc;
+}
+/* the same number's warm halo, drawn under it (additive, so digits that
+   overlap their neighbours' light do not cut into each other) */
+static void fx_number_glow(long long v,float cx,float y,float sc,uint32_t col,int alpha){
+  char b[40];
+  commas(b,sizeof b,v<0?0:v);
+  float pen=cx-fx_number_w(b,sc)*0.5f;
+  for(int i=0;b[i];i++){
+    const fxspr_t*s=&digS[b[i]==','?10:b[i]-'0'];
+    fxs_glow(s,pen-s->ox*sc,y-s->oy*sc,sc,col,alpha);
+    pen += s->tw*sc+FX_TRACK*FXDPX*sc;
   }
 }
 /* a baked title, scaled about its centre (cx,cy) */
@@ -991,7 +1285,8 @@ static void fx_spawn_star(float x,float y,uint32_t col,float life,int size,int t
   p->col=col; p->life=p->life0=life; p->size=(uint8_t)size;
   p->rot=fxr()*TAU; p->rotv=8.0f+fxr()*10.0f;
 }
-static const uint32_t CONFC[8]={0xFF3A5A,0xFFD24A,0x4FE8FF,0x7CFF6A,0xFF7AE0,0xB07CFF,0xFFFFFF,0xFF9A30};
+/* confetti in the lounge's colours: its three neons, gold, green, pink, ivory */
+static const uint32_t CONFC[8]={LZ_MAGENTA,LZ_GOLD,LZ_CYAN,LZ_GREEN,0xFF7AE0,LZ_HONEY,LZ_IVORY,LZ_AMBER};
 static void fx_spawn_confetti(float x,float y,float vx,float vy,int top){
   fxp_t*p=fx_new(FXK_CONFETTI,x,y,top); if(!p) return;
   p->vx=vx; p->vy=vy; p->col=CONFC[fxRng&7];
@@ -1131,9 +1426,10 @@ static char  fxSub[64];
 static uint32_t fxCol;
 
 static void fx_transition(const char*title,const char*sub,uint32_t col){
-  uint32_t st[5]={0xFFFFFF,mixc(col,0xFFFFFF,0.55f),col,scalec(col,0.55f),scalec(col,0.22f)};
+  /* gold type like every other title in the lounge; the card's own
+     colour is its halo, its rays and its ring */
   fxHalo=scalec(col,0.8f);
-  fx_bake_text(&trS,title&&title[0]?title:" ",13,st,5,12);
+  fx_bake_text(&trS,title&&title[0]?title:" ",13,FX_GOLDG,5,12);
   fxHalo=0;
   snprintf(fxSub,sizeof fxSub,"%s",sub?sub:"");
   fxCol=col; fxTrP=0.0f;
@@ -1165,33 +1461,40 @@ static void fx_init(void){
   for(int i=0;i<NSTAR;i++) fx_build_star(&starS[i],STARR[i]);
   for(int i=0;i<NSYM;i++) for(int k=1;k<NPOP;k++) fx_build_pop(&popS[i][k],&sym[i],POPSC[k]);
 
+  /* the celebration titles: gold display type, each tier with the halo
+     of its neon (EPIC in rose gold, the ULTIMATE in pale platinum gold) */
   fxHalo=0xE08A10;
-  fx_bake_text(&titleS[FXT_BIG],  "BIG WIN",  16,GOLDG,5,14);
-  fxHalo=0xE0207A;
-  fx_bake_text(&titleS[FXT_SUPER],"SUPER WIN",16,FX_SUPERG,5,14);
-  fxHalo=0x1E78E0;
-  fx_bake_text(&titleS[FXT_MEGA], "MEGA WIN", 16,FX_MEGAG,5,14);
-  fxHalo=0x9A28E0;
-  fx_bake_text(&titleS[FXT_EPIC], "EPIC WIN", 16,FX_EPICG,6,16);
-  fxHalo=0x40B0FF;
-  fx_bake_text(&titleS[FXT_JULT],  JP_NAME[JP_ULT],  19,RAINBOWG,6,16);
-  fxHalo=0xE03010;
-  fx_bake_text(&titleS[FXT_JMEGA], JP_NAME[JP_MEGA], 19,FX_FIREG,5,16);
-  fxHalo=0x8A30E0;
-  fx_bake_text(&titleS[FXT_JMAJOR],JP_NAME[JP_MAJOR],19,FX_MAJORG,5,16);
-  fxHalo=0x10B090;
-  fx_bake_text(&titleS[FXT_JMINOR],JP_NAME[JP_MINOR],19,FX_MINORG,5,16);
-  fxHalo=0xD08010;
-  fx_bake_text(&titleS[FXT_JACKPOT],"JACKPOT",9,GOLDG,5,8);
-  fx_bake_text(&titleS[FXT_X2],"X2",16,GOLDG,5,12);
-  fx_bake_text(&titleS[FXT_X3],"X3",16,GOLDG,5,12);
-  fx_bake_text(&titleS[FXT_X4],"X4",16,GOLDG,5,12);
-  fx_bake_text(&titleS[FXT_X5],"X5",16,GOLDG,5,12);
-  fx_bake_text(&titleS[FXT_MULTUP],"MULTIPLIER UP",5,SILVERG,4,6);
+  fx_bake_text(&titleS[FXT_BIG],  "BIG WIN",  14,FX_GOLDG,5,14);
+  fxHalo=0xC8189A;
+  fx_bake_text(&titleS[FXT_SUPER],"SUPER WIN",14,FX_GOLDG,5,14);
+  fxHalo=0x109CC8;
+  fx_bake_text(&titleS[FXT_MEGA], "MEGA WIN", 14,FX_GOLDG,5,14);
+  fxHalo=0xE0306A;
+  fx_bake_text(&titleS[FXT_EPIC], "EPIC WIN", 15,FX_ROSEG,5,16);
+  fxHalo=0x18A8D8;
+  fx_bake_text(&titleS[FXT_JULT],  JP_NAME[JP_ULT],  13,FX_PLATG,5,16);
+  fxHalo=0xC8189A;
+  fx_bake_text(&titleS[FXT_JMEGA], JP_NAME[JP_MEGA], 15,FX_GOLDG,5,16);
+  fxHalo=0xD84A2A;
+  fx_bake_text(&titleS[FXT_JMAJOR],JP_NAME[JP_MAJOR],15,FX_GOLDG,5,16);
+  fxHalo=0x20B888;
+  fx_bake_text(&titleS[FXT_JMINOR],JP_NAME[JP_MINOR],15,FX_GOLDG,5,16);
+  fxHalo=0xD07010;
+  fx_bake_text(&titleS[FXT_JACKPOT],"JACKPOT",9,FX_GOLDG,5,10);
+  fx_bake_text(&titleS[FXT_X2],"X2",16,FX_GOLDG,5,12);
+  fx_bake_text(&titleS[FXT_X3],"X3",16,FX_GOLDG,5,12);
+  fx_bake_text(&titleS[FXT_X4],"X4",16,FX_GOLDG,5,12);
+  fx_bake_text(&titleS[FXT_X5],"X5",16,FX_GOLDG,5,12);
   fxHalo=0;
-  fx_bake_text(&titleS[FXT_BADGE],"X2",3,GOLDG,5,0);
-  for(int i=0;i<10;i++){ char b[2]={(char)('0'+i),0}; fx_bake_text(&digS[i],b,FXDPX,GOLDG,5,0); }
-  fx_bake_text(&digS[10],",",FXDPX,GOLDG,5,0);
+  fx_bake_text(&titleS[FXT_BADGE],"X2",3,FX_GOLDG,5,0);
+  /* the digits carry a glow mask (no baked halo, which would paint over
+     the neighbouring digit): fx_number_glow lights them from behind */
+  for(int i=0;i<10;i++){ char b[2]={(char)('0'+i),0}; fx_bake_text(&digS[i],b,FXDPX,FX_GOLDG,5,8); }
+  fx_bake_text(&digS[10],",",FXDPX,FX_GOLDG,5,8);
+  /* the glass the counts sit on */
+  fx_bake_panel(&fxPanel[FXP_WIN],600,152,18.0f);
+  fx_bake_panel(&fxPanel[FXP_MULT],700,112,16.0f);
+  fx_bake_panel(&fxPanel[FXP_SUB],900,44,12.0f);
   fxReady=1;
 }
 static void fx_deinit(void){
@@ -1202,6 +1505,7 @@ static void fx_deinit(void){
   for(int i=0;i<NSYM;i++) for(int k=0;k<NPOP;k++) fxs_free(&popS[i][k]);
   for(int i=0;i<NFXT;i++) fxs_free(&titleS[i]);
   for(int i=0;i<11;i++) fxs_free(&digS[i]);
+  for(int i=0;i<NFXP;i++){ fxs_free(&fxPanel[i].body); fxs_free(&fxPanel[i].neon); }
   fxs_free(&trS);
   fxCount=0; fx_stop(); fxTrP=-1.0f;
   fxReady=0;
@@ -1407,7 +1711,8 @@ static void fx_draw_transition(void){
   env=clampf(env,0,1);
   float cx=FBW*0.5f, cy=300.0f;
   { fxstage_t st={ (int)cx,(int)cy, 0, 520,240,(int)(215*env),
-                   120,470,18,(int)(130*env),0,(int)(70*env), p*0.9f,0.55f, fxCol };
+                   120,470,18,(int)(130*env),0,(int)(70*env), p*0.9f,0.55f, fxCol,
+                   (int)(110*env), p+1.0f, {FX_BEAM,FX_BEAM}, 0,0,0,0 };
     fx_stage_draw(&st); }
   /* the slam: in from huge, accelerating, with a trail of ghosts */
   float sc, white=0;
@@ -1428,7 +1733,13 @@ static void fx_draw_transition(void){
   fx_title(&trS,cx,cy,sc,(int)(255*env),(int)white,sh);
   if(fxSub[0] && p>0.35f){
     float a=clampf((p-0.35f)/0.2f,0,1)*env;
-    if(a>0.05f) text(fxSub,FBW/2,(int)(cy+trS.th*0.5f+36),3,mixc(0x000000,mixc(fxCol,0xFFFFFF,0.5f),a),1,1);
+    /* on a slim bar of dark glass in the card's neon, so it reads over
+       the cream drums */
+    const fxpanel_t*P=&fxPanel[FXP_SUB];
+    float w=lz_width(LZF_UI_M,fxSub,28.0f,3.0f)+60.0f;
+    float sy=cy+trS.th*0.5f+26.0f;
+    if(w<=P->w) fx_panel_draw(P,(int)cx-P->w/2,(int)sy,fxCol,(int)(235*a));
+    fx_caption(fxSub,cx,sy+6.0f,28.0f,lz_hot(fxCol,0.55f),a,3.0f);
   }
 }
 
@@ -1552,7 +1863,7 @@ static void fx_bigwin_tick(int tier,int done){
     fx_spawn_star(FBW*0.5f+cosf(a)*rr,250.0f+sinf(a)*rr*0.42f,0xFFF6D8,0.5f+fxr()*0.7f,fxr()<0.3f?2:1,1);
   }
   if(tier>=4 && fxr()<0.05f)
-    fx_firework(GX+80.0f+fxr()*(GW-160.0f),FXFLOOR,fx_hue(fxr()));
+    fx_firework(GX+80.0f+fxr()*(GW-160.0f),FXFLOOR,fx_lounge_col(fxr()));
   if(tier>=4 && fxr()<0.20f)
     fx_spawn_confetti(fxr()*FBW,-10.0f,fxrs()*60.0f,40.0f+fxr()*80.0f,1);
 }
@@ -1591,7 +1902,7 @@ static void fx_jackpot_begin(int tier){
   for(int i=0;i<(ult?120:60);i++)
     fx_spawn_confetti(cx+fxrs()*420.0f,cy+fxrs()*40.0f,fxrs()*640.0f,-260.0f-fxr()*640.0f,1);
   fx_spawn_flare(cx,cy,col,0.7f,3,1);
-  if(ult) for(int i=0;i<3;i++) fx_firework(GX+100.0f+i*(GW-200.0f)/2.0f,FXFLOOR,fx_hue(i/3.0f));
+  if(ult) for(int i=0;i<3;i++) fx_firework(GX+100.0f+i*(GW-200.0f)/2.0f,FXFLOOR,FX_NEON3[i]);
 }
 static void fx_jackpot_tick(int tier,float t){
   if(tier<0||tier>=NJP) return;
@@ -1606,7 +1917,7 @@ static void fx_jackpot_tick(int tier,float t){
   }
   float fw = ult?0.032f:(tier==JP_MEGA?0.012f:0.0f);
   if(opt_limiter) fw*=0.6f;
-  if(fxr()<fw) fx_firework(80.0f+fxr()*(FBW-160.0f),FXFLOOR,ult?fx_hue(fxr()):JPCOL[tier]);
+  if(fxr()<fw) fx_firework(80.0f+fxr()*(FBW-160.0f),FXFLOOR,ult?fx_lounge_col(fxr()):JPCOL[tier]);
   if(fxr()<0.35f){
     float a=fxr()*TAU, r=220.0f+fxr()*300.0f;
     fx_spawn_star(FBW*0.5f+cosf(a)*r,215.0f+sinf(a)*r*0.38f,0xFFFFFF,0.5f+fxr()*0.7f,fxr()<0.3f?2:1,1);
@@ -1769,19 +2080,55 @@ static void fx_slam_title(const fxspr_t*s,float cx,float cy,float p,float t,floa
   fx_title(s,cx,cy,sc,255,(int)white,shine);
 }
 
+/*  A neon rule across the screen at row y: a tube in `col` with its glow
+ *  above and below, and honey pulses chasing along it.  The chase is a
+ *  pure function of t.  Colours come from two small tables built per
+ *  call, so the pixel loops are an index, a blend and an add.        */
+static void fx_neon_rule(int y,uint32_t col,int alpha,float t){
+  if(alpha<=0) return;
+  if(alpha>255) alpha=255;
+  int y0=y-9, y1=y+10;
+  if(!fx_clip(&y0,&y1)) return;
+  uint32_t core[64], glow[64];
+  uint32_t hot=lz_hot(col,0.62f), hhot=lz_hot(LZ_HONEY,0.55f);
+  for(int i=0;i<64;i++){
+    float b=i<16?1.0f-fabsf(i-7.5f)/8.0f:0.0f;
+    core[i]=mixc(hot,hhot,b);
+    glow[i]=mixc(col,LZ_HONEY,b);
+  }
+  int ph=(int)(t*(opt_limiter?140.0f:380.0f));
+  int a256=alpha+(alpha>>7);
+  for(int yy=y0;yy<y1;yy++){
+    int dy=abs(yy-y);
+    uint32_t*d=fb+(size_t)yy*FBW;
+    if(dy<=1){
+      for(int x=0;x<FBW;x++) d[x]=px_mix(d[x],core[((x+ph)>>2)&63],a256);
+    } else {
+      int g=(int)(alpha*0.60f*expf(-(dy-1)/2.6f));
+      if(g<2) continue;
+      for(int x=0;x<FBW;x++) d[x]=px_add(d[x],px_scale(glow[((x+ph)>>2)&63],g));
+    }
+  }
+}
+
 static void fx_bigwin_draw(void){
   if(G.state!=ST_SHOWWIN || G.banner<1) return;
   int T=clampi(G.banner,1,4);
   float t=G.t, a=clampf(t/0.30f,0,1);
   float p=1.0f-clampf(G.bannerT,0,1);            /* 0..1 since the last slam */
-  uint32_t col=BWCOL[T];
-  const float cx=FBW*0.5f, cy=250.0f;
-  /* the stage: dimmed cabinet, a dark plate, god rays behind the title;
-     a slam kicks the rays brighter */
+  /* the tier's neon; EPIC runs all three of the lounge's in turn */
+  uint32_t col=T>=4?fx_neon_cycle(t*0.9f):BWCOL[T];
+  const float cx=FBW*0.5f, cy=222.0f;
+  /* the stage: a dark plate, god rays in the tier's neon behind the
+     title, and the honey searchlights; a slam kicks the rays brighter */
+  const fxpanel_t*P=&fxPanel[FXP_WIN];
+  int px=FBW/2-P->w/2, py=300;
   float kick=p<0.5f?(1.0f-p/0.5f):0.0f;
-  { fxstage_t st={ (int)cx,(int)cy+20, 0, 470,240,(int)(225*a),
-                   120,400+T*15,14+T*4,(int)((100+20*T)*a+90*kick),T>=4,(int)(80*a+70*kick),
-                   t*(0.22f+0.08f*T),0.6f, col };
+  { fxstage_t st={ (int)cx,(int)cy+30, 0, 470,240,(int)(225*a),
+                   120,400+T*15,14+T*4,(int)((90+20*T)*a+80*kick),T>=4?2:0,(int)(70*a+60*kick),
+                   t*(0.22f+0.08f*T),0.6f, col,
+                   (int)((116+14*T)*a), t, {FX_BEAM,FX_BEAM},
+                   a>=1.0f?px+4:0, a>=1.0f?px+P->w-4:0, py+20, py+P->h-20 };
     fx_stage_draw(&st); }
   if(p<0.6f) fx_ring((int)cx,(int)cy,p*1100.0f,30.0f+p*30.0f,col,(int)(200*(1.0f-p/0.6f)));
   /* title */
@@ -1789,18 +2136,18 @@ static void fx_bigwin_draw(void){
   const fxspr_t*old=T>1?&titleS[FXT_BIG+T-2]:NULL;
   float sh=fx_shine_x(s,cx,1.0f,t,2.4f,0.8f);
   fx_slam_title(s,cx,cy,p,t,0.02f,col,(int)(150+60*sinf(t*6.0f)),sh,old);
-  /* the counter on its plate */
-  int pw=700, ph=112, px=FBW/2-pw/2, py=338;
-  fx_plate(px,py,pw,ph,26,0x2A1236,0x07030C,(int)(225*a));
-  fx_rframe(px,py,pw,ph,26,3,mixc(col,0xFFFFFF,0.35f),(int)(255*a));
-  fx_rframe(px+6,py+6,pw-12,ph-12,21,1,scalec(col,0.6f),(int)(200*a));
-  float ns=0.95f*(1.0f+(G.bannerT>0.7f?0.28f*(G.bannerT-0.7f)/0.3f:0.0f));
+  /* the count on dark glass with the tier's neon round it */
+  fx_panel_draw(P,px,py,col,(int)(255*a));
+  fx_caption("TOTAL WIN",cx,(float)py+10.0f,24.0f,lz_hot(col,0.30f),a,5.0f);
+  float ns=fx_number_fit(G.winShown,0.78f,520.0f)*(1.0f+(G.bannerT>0.7f?0.22f*(G.bannerT-0.7f)/0.3f:0.0f));
+  float ny=py+74.0f-FXDPX*3.5f*ns;             /* centred on the glass */
   int done=G.winShown>=G.winTotal;
-  fx_number(G.winShown,cx,py+ph*0.5f-FXDPX*3.5f*ns,ns,(int)(255*a),p<0.2f?(int)(150*(1.0f-p/0.2f)):0);
+  fx_number_glow(G.winShown,cx,ny,ns,LZ_AMBER,(int)(150*a));
+  fx_number(G.winShown,cx,ny,ns,(int)(255*a),p<0.2f?(int)(150*(1.0f-p/0.2f)):0);
   if(t>0.8f){
-    int blink=((int)(t*2.4f))&1;
-    if(!done) text("PRESS ANY BUTTON TO SKIP",FBW/2,py+ph+14,2,0xC8C0E0,1,1);
-    else if(blink||opt_limiter) text("PRESS ANY BUTTON TO COLLECT",FBW/2,py+ph+14,2,0xFFFFFF,1,1);
+    float y=(float)(py+114);
+    if(!done) fx_caption("PRESS ANY BUTTON TO SKIP",cx,y,24.0f,lz_hot(LZ_DIM,0.35f),0.9f,4.0f);
+    else      fx_prompt("PRESS ANY BUTTON TO COLLECT",y,t);
   }
 }
 
@@ -1808,11 +2155,17 @@ static void fx_jackpot_draw(void){
   int tier=G.jpWon<0?JP_MINOR:G.jpWon;
   int ult=(tier==JP_ULT);
   float t=G.t, a=clampf(t/0.25f,0,1), lim=opt_limiter?0.5f:1.0f;
-  uint32_t col=JPCOL[tier];
-  const float cx=FBW*0.5f, cy=210.0f;
-  { fxstage_t st={ (int)cx,(int)cy+40, 0, 520,270,(int)(235*a),
-                   130,ult?500:460,ult?24:18,(int)((ult?150:120)*a),ult,(int)(100*a),
-                   t*(ult?0.45f:0.3f),0.60f, col };
+  /* the tier's neon, as on the ladder; the ULTIMATE runs all three */
+  uint32_t col=ult?fx_neon_cycle(t*0.9f):JPCOL[tier];
+  const float cx=FBW*0.5f, cy=150.0f;
+  const fxpanel_t*P=&fxPanel[FXP_WIN];
+  int px=FBW/2-P->w/2, py=292;
+  float pa=clampf((t-0.2f)/0.2f,0,1);
+  { fxstage_t st={ (int)cx,(int)cy+60, 0, 540,290,(int)(235*a),
+                   130,ult?520:470,ult?24:18,(int)((ult?150:120)*a),ult?2:0,(int)(100*a),
+                   t*(ult?0.45f:0.3f),0.60f, col,
+                   (int)((ult?170:150)*a), t, {FX_BEAM,FX_BEAM},
+                   pa>=1.0f?px+4:0, pa>=1.0f?px+P->w-4:0, py+20, py+P->h-20 };
     fx_stage_draw(&st); }
   /* the winning cells come back through the dim, so the player sees
      exactly what did it */
@@ -1821,21 +2174,14 @@ static void fx_jackpot_draw(void){
     blit(&sym[G.grid[r][row]],GX+r*CW+SOX,GY+row*CH+SOY,GY,GY+GH,255,0,0.0f);
   }
   float pl=0.5f+0.5f*sinf(t*8.0f);
-  fx_light_cluster(G.jpMask,ult?0x9AF0FF:0xFF6A30,0.7f+0.3f*pl,1,t);
+  fx_light_cluster(G.jpMask,col,0.7f+0.3f*pl,1,t);
   if(t<0.7f) fx_ring((int)cx,(int)cy,t*1300.0f,40.0f,col,(int)(220*(1.0f-t/0.7f)));
   if(ult && t>0.5f && t<1.3f) fx_ring((int)cx,(int)cy,(t-0.5f)*1300.0f,30.0f,0xFFFFFF,(int)(160*lim*(1.0f-(t-0.5f)/0.8f)));
-  /* the band the title sits in, its rules running with light */
-  int by0=128, by1=478;
-  uint32_t rule=ult?fx_hue(t*0.3f):mixc(col,0xFFFFFF,0.4f);
-  for(int j=0;j<3;j++){
-    int ya=by0+j, yb=by1-j;
-    for(int x=0;x<FBW;x++){
-      float run=0.5f+0.5f*sinf(x*0.035f-t*9.0f);
-      uint32_t c=mixc(scalec(rule,0.55f),0xFFFFFF,run*0.6f*lim);
-      fb_blend(x,ya,c,(int)(255*a));
-      fb_blend(x,yb,c,(int)(255*a));
-    }
-  }
+  /* the band the celebration sits in, ruled by two neon tubes with
+     honey light chasing along them */
+  int by0=76, by1=472;
+  fx_neon_rule(by0,col,(int)(235*a),t);
+  fx_neon_rule(by1,col,(int)(235*a),t+1.7f);
   /* title: the tier word slams, JACKPOT follows it in */
   const fxspr_t*s=&titleS[FXT_JULT+tier];
   float sh=fx_shine_x(s,cx,1.0f,t-0.4f,2.0f,0.8f);
@@ -1844,15 +2190,19 @@ static void fx_jackpot_draw(void){
   if(jt>0){
     float js=jt<1.0f?1.0f+(1.0f-jt)*1.6f:1.0f;
     const fxspr_t*j=&titleS[FXT_JACKPOT];
-    fx_title(j,cx,cy+104.0f,js,(int)(255*jt),jt<1.0f?(int)(160*lim):0,fx_shine_x(j,cx,1.0f,t-0.9f,2.0f,0.6f));
+    fx_title(j,cx,cy+90.0f,js,(int)(255*jt),jt<1.0f?(int)(160*lim):0,fx_shine_x(j,cx,1.0f,t-0.9f,2.0f,0.6f));
   }
-  /* the meter rolls up to the prize */
+  /* the meter rolls up to the prize, on dark glass in the tier's neon */
+  fx_panel_draw(P,px,py,col,(int)(255*pa));
+  fx_caption("JACKPOT PAYS",cx,(float)py+10.0f,24.0f,lz_hot(col,0.30f),pa,5.0f);
   float run=fx_jackpot_run(tier), u=clampf((t-0.3f)/(run-0.3f),0,1);
   u=1.0f-(1.0f-u)*(1.0f-u)*(1.0f-u);
   long long v=(long long)(G.jpAmt*(double)u);
   if(t>=run) v=G.jpAmt;
-  fx_number(v,cx,388.0f,0.9f,(int)(255*clampf((t-0.2f)/0.2f,0,1)),0);
-  if(t>1.4f && (((int)(t*2.4f))&1)) text("PRESS ANY BUTTON TO COLLECT",FBW/2,by1+16,3,0xFFFFFF,1,1);
+  float ns=fx_number_fit(v,0.78f,540.0f), ny=py+74.0f-FXDPX*3.5f*ns;
+  fx_number_glow(v,cx,ny,ns,LZ_AMBER,(int)(150*pa));
+  fx_number(v,cx,ny,ns,(int)(255*pa),0);
+  if(t>1.4f) fx_prompt("PRESS ANY BUTTON TO COLLECT",(float)(py+114),t);
 }
 
 static void fx_multup_draw(void){
@@ -1860,13 +2210,13 @@ static void fx_multup_draw(void){
   float env=u<0.06f?u/0.06f:(u>0.80f?(1.0f-u)/0.20f:1.0f);
   env=clampf(env,0,1);
   const float cx=FBW*0.5f, cy=(float)(GY+GH/2);
-  { fxstage_t st={ (int)cx,(int)cy, 0, 400,190,(int)(200*env),
-                   100,360,16,(int)(130*env),0,(int)(70*env), G.t*1.3f,0.55f, 0xFFC040 };
+  { fxstage_t st={ (int)cx,(int)cy+20, 0, 460,250,(int)(235*env),
+                   100,360,16,(int)(130*env),0,(int)(70*env), G.t*1.3f,0.55f, LZ_HONEY, 0,0.0f,{0,0}, 0,0,0,0 };
     fx_stage_draw(&st); }
-  if(u<0.35f) fx_ring((int)cx,(int)cy,u*1400.0f,24.0f,0xFFD24A,(int)(200*(1.0f-u/0.35f)));
-  const fxspr_t*ttl=&titleS[FXT_MULTUP];
-  float ty=cy-88.0f-(1.0f-clampf(u/0.12f,0,1))*40.0f;
-  fx_title(ttl,cx,ty,1.0f,(int)(255*env),0,fx_shine_x(ttl,cx,1.0f,u*1.9f,1.9f,0.7f));
+  if(u<0.35f) fx_ring((int)cx,(int)cy,u*1400.0f,24.0f,LZ_HONEY,(int)(200*(1.0f-u/0.35f)));
+  /* the headline is a neon sign that drops in and lights */
+  float ty=cy-92.0f-(1.0f-clampf(u/0.12f,0,1))*40.0f;
+  fx_neon_sign("MULTIPLIER UP",cx,ty,56.0f,LZ_MAGENTA,env);
   int m=clampi(G.fsMult,2,5);
   const fxspr_t*s=&titleS[FXT_X2+m-2];
   /* the number slams, and once its sparks have left for the meter it
@@ -1877,27 +2227,28 @@ static void fx_multup_draw(void){
   else { float q=p-0.16f; sc=1.0f-0.10f*expf(-q*7.0f)*cosf(q*24.0f); }
   if(p<0.4f) white=(1.0f-p/0.4f)*230.0f*lim;
   sc*=shrink;
-  if(p>0.10f && p<0.40f) fx_title_glow(s,cx,cy+20.0f,sc,0xFFB020,(int)(220*env*(1.0f-(p-0.10f)/0.30f)));
-  if(p<0.16f) fx_title(s,cx,cy+20.0f,sc*1.25f,(int)(80*env),0,FX_NOSHINE);
-  fx_title(s,cx,cy+20.0f,sc,(int)(255*env),(int)white,FX_NOSHINE);
+  if(p>0.10f && p<0.40f) fx_title_glow(s,cx,cy+14.0f,sc,LZ_HONEY,(int)(220*env*(1.0f-(p-0.10f)/0.30f)));
+  if(p<0.16f) fx_title(s,cx,cy+14.0f,sc*1.25f,(int)(80*env),0,FX_NOSHINE);
+  fx_title(s,cx,cy+14.0f,sc,(int)(255*env),(int)white,FX_NOSHINE);
 
   /*  Say what just happened, in words: which way it moved and by how
    *  much (two or three wild reels in one spin climb two or three
    *  steps), what it multiplies, and that it will not come back down.
-   *  The plain text has no alpha, so it is up only while the envelope
-   *  is well open.                                                    */
-  if(u>0.10f && u<0.80f){
+   *  On dark glass with a honey tube, fading in once the number has
+   *  landed and out with the rest.                                    */
+  float ta=clampf((u-0.08f)/0.06f,0,1)*env;
+  if(ta>0.02f){
     char b[80];
     int from=clampi(G.multFrom,1,5), to=clampi(G.fsMult,1,5), up=to-from;
-    int py=(int)cy+104;
-    fb_rrect((int)cx-330,py-6,660,78,14,0x06020E,(int)(210*env));
-    fb_rframe((int)cx-330,py-6,660,78,14,2.0f,0xFFD24A,(int)(230*env));
+    const fxpanel_t*P=&fxPanel[FXP_MULT];
+    int px=(int)cx-P->w/2, py=(int)cy+104;
+    fx_panel_draw(P,px,py,LZ_HONEY,(int)(235*ta));
     if(up>1) snprintf(b,sizeof b,"%d WILD REELS:  X%d  >  X%d",up,from,to);
     else     snprintf(b,sizeof b,"WILD REEL:  X%d  >  X%d",from,to);
-    text(b,(int)cx,py+2,3,0xFFE9A8,1,1);
+    fx_caption(b,cx,(float)py+8.0f,36.0f,LZ_GOLD,ta,2.0f);
     if(to>=FS_MAXMULT) snprintf(b,sizeof b,"MAXIMUM!  EVERY WIN PAYS X%d UNTIL THE END",to);
     else               snprintf(b,sizeof b,"THIS WIN AND EVERY WIN AFTER IT PAYS X%d",to);
-    text(b,(int)cx,py+30,2,0xFFFFFF,1,1);
-    text("THE MULTIPLIER NEVER GOES DOWN UNTIL THE FREE SPINS END",(int)cx,py+50,1,0xC8D2F0,1,1);
+    fx_caption(b,cx,(float)py+50.0f,26.0f,LZ_IVORY,ta,1.5f);
+    fx_caption("THE MULTIPLIER NEVER GOES DOWN UNTIL THE FREE SPINS END",cx,(float)py+82.0f,19.0f,LZ_DIM,ta,3.0f);
   }
 }
