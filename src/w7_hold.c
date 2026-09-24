@@ -220,8 +220,10 @@ static int hold_force_rows(int r,int*rows){
 
 /* === ART =========================================================
  *  Everything is baked at init: coins in three finishes at two sizes,
- *  the spinning ghost, glows, lamps, a chunky display font, and the
- *  whole dark board behind the grid.  At run time it is blits.
+ *  the spinning ghost, glows, the neon respin bulbs, the lounge's gold
+ *  display type (Bungee) cut into glyph sprites, and the whole board
+ *  behind the grid - dark glass wells ringed in honey neon under a
+ *  glass header.  At run time it is blits.
  * ================================================================= */
 #define HHEAD 80                          /* header band atop the window */
 #define HGY   (GY+HHEAD)                  /* board top                   */
@@ -233,6 +235,7 @@ static int hold_force_rows(int r,int*rows){
 #define METY2 (GY+9)
 #define METW  194
 #define METH2 62
+#define HBEAT 0xFF2A6Au                   /* the heartbeat: ruby-magenta neon */
 
 static spr_t hcoin[3];      /* board coins: gold, MINOR, MAJOR            */
 static spr_t bcoin[3];      /* reel-size MINOR / MAJOR, over the strip coin */
@@ -245,18 +248,26 @@ static hring_t hring[3];    /* additive rim glow, board size, per finish  */
 static hring_t bring;       /* additive rim glow, reel size               */
 static spr_t hcoinD[3];     /* board coins, dimmed: already counted       */
 static uint32_t *hbkD;      /* the backdrop at 3/8, behind the win slam   */
-static spr_t hlamp[2];      /* respin lamp, off and on                    */
+static spr_t hlamp[2];      /* respin bulb, unlit glass and lit           */
 static spr_t hhalo;         /* additive halo round a lit lamp             */
 static spr_t hspark;        /* additive spark for the collect flight      */
 static spr_t hspin;         /* a turning cell's lit drum, socket-sized    */
 static uint32_t *hbk;       /* the board backdrop, GW x GH                */
 
-/* chunky display type: the bubble lettering, baked per glyph */
-enum { HF_G2, HF_G3, HF_G4, HF_G9, HF_I2, HF_N };
-static const int HF_PX[HF_N]  = { 2, 3, 4, 9, 2 };
-static const int HF_PAL[HF_N] = { 0, 0, 0, 0, 1 };
+/*  The lounge's gold display type, Bungee, cut into one sprite per glyph
+ *  at each size the show uses: cream running to amber down the letter, a
+ *  dark rim that keeps it readable on a coin's enamel, a drop shadow, and
+ *  for the big sizes a warm glow baked in.  Glyph sprites rather than the
+ *  kit's string cache, because a coin label must clip to the cell or the
+ *  window it sits in (blit's cy0/cy1), and a value that changes costs a
+ *  few blits instead of a rasterise.  The ice finish is for the MINOR.  */
+enum { HF_S, HF_M, HF_L, HF_IS, HF_T, HF_XM, HF_XL, HF_N };
+static const float HF_CAP[HF_N]  = { 12, 15, 18, 12, 20, 32, 62 };  /* cap height, px */
+static const int   HF_ICE[HF_N]  = {  0,  0,  0,  1,  0,  0,  0 };
+static const int   HF_GLOW[HF_N] = {  0,  0,  0,  0,  1,  1,  1 };
 static spr_t hglyph[HF_N][64];
-static int   hfpad[HF_N];
+static int   hgox[HF_N][64], hgoy[HF_N][64];   /* sprite corner from the pen and the cap top */
+static float hadv[HF_N][64];
 
 static void hspr_free(spr_t*s){
   free(s->px); free(s->rx0); free(s->rx1);
@@ -276,77 +287,96 @@ static void hpx_over(uint8_t*p,uint32_t col,int a){
 }
 
 static void hold_bake_font(int f){
-  static const uint32_t PAL[2][5]={
-    {0xFFFDF0,0xFFEBA8,0xF0B420,0xA8760C,0x5E4206},        /* gold        */
-    {0xFFFFFF,0xE8F6FF,0x9CD2F4,0x3C82BC,0x143A62} };      /* ice silver  */
-  int px=HF_PX[f];
-  float Rin=px*0.64f, Rout=Rin+(px*0.42f>1.5f?px*0.42f:1.5f);
-  int so=(int)(px*0.34f+0.5f); if(so<1) so=1;
-  int pad=(int)(Rout+2.0f);
-  hfpad[f]=pad;
-  int w=5*px+2*pad+so, h=7*px+2*pad+so;
-  uint8_t*fm=(uint8_t*)calloc((size_t)w*h,1), *om=(uint8_t*)calloc((size_t)w*h,1);
-  if(!fm||!om){ free(fm); free(om); return; }
+  static const uint32_t PAL[2][3]={
+    {0xFFF6C4,0xFFD25A,0xD68016},                          /* gold, as lz_gold */
+    {0xFFFFFF,0xBCE6FF,0x4A96D0} };                        /* ice              */
+  static const uint32_t RIM[2]={0x2A1004,0x06142E};
+  float capH=HF_CAP[f];
+  /* the smallest baked face at least this big: downsampling by more
+     than two would alias */
+  int src = capH<=lzf[LZF_DISP_S].capH ? LZF_DISP_S : (capH<=lzf[LZF_DISP_M].capH ? LZF_DISP_M : LZF_DISP_L);
+  const lz_font*F=&lzf[src];
+  for(int ch=32;ch<96;ch++){ hspr_free(&hglyph[f][ch-32]); hadv[f][ch-32]=0; }
+  if(!F->ok) return;
+  float k=capH/F->capH;
+  float rim=capH*0.075f<1.1f?1.1f:capH*0.075f;
+  int so=(int)(capH*0.06f+0.5f); if(so<1) so=1;
+  int glow=HF_GLOW[f], gr=glow?(int)(capH*0.16f+1.5f):0;
+  int pad=(int)ceilf(rim)+so+2*gr+2;
+  /* the big sizes only ever show numbers and a few words, and their
+     outline is the slow part of the bake */
+  const char*only = capH>30 ? "0123456789,.+-KMBX GRAND" : NULL;
   for(int ch=32;ch<96;ch++){
+    const lz_glyph*g=lz_glyph_of(F,(unsigned char)ch);
+    hadv[f][ch-32]=g->adv*k;
+    if(!g->m || ch==' ' || (only && !strchr(only,ch))) continue;
+    float gx=g->ox*k, gy=(g->oy-F->capTop)*k;
+    int ox=(int)floorf(gx), oy=(int)floorf(gy);
+    int w=(int)ceilf(g->w*k)+2*pad+2, h=(int)ceilf(g->h*k)+2*pad+2;
+    uint8_t*fm=(uint8_t*)calloc((size_t)w*h,1), *om=(uint8_t*)calloc((size_t)w*h,1), *gm=NULL;
     spr_t*s=&hglyph[f][ch-32];
-    hspr_free(s);
-    memset(fm,0,(size_t)w*h); memset(om,0,(size_t)w*h);
-    const uint8_t*gl=FONT[ch-32];
-    #define HSET(rr,cc) ((rr)>=0&&(rr)<7&&(cc)>=0&&(cc)<5&&(gl[rr]&(0x10>>(cc))))
-    for(int r=0;r<7;r++) for(int c2=0;c2<5;c2++){
-      if(!HSET(r,c2)) continue;
-      float cx=pad+c2*px+px*0.5f, cy=pad+r*px+px*0.5f;
-      tb_stamp(om,w,h,cx,cy,Rout); tb_stamp(fm,w,h,cx,cy,Rin);
-      static const int NB[4][2]={{0,1},{1,0},{1,1},{1,-1}};
-      for(int k=0;k<4;k++){
-        int nr=r+NB[k][0], nc=c2+NB[k][1];
-        if(!HSET(nr,nc)) continue;
-        float nx=pad+nc*px+px*0.5f, ny=pad+nr*px+px*0.5f;
-        tb_cap(om,w,h,cx,cy,nx,ny,Rout); tb_cap(fm,w,h,cx,cy,nx,ny,Rin);
+    s->px=(uint8_t*)calloc((size_t)w*h,4);
+    if(!fm||!om||!s->px){ free(fm); free(om); hspr_free(s); continue; }
+    lz_rast(fm,w,h,g->m,g->w,g->h,pad+(gx-ox),pad+(gy-oy),k);
+    lz_dilate(fm,om,w,h,rim);
+    if(glow){
+      LCanvas cv;
+      if(lz_cv_new(&cv,w,h)){
+        for(int i=0;i<w*h;i++) cv.px[i*4]=cv.px[i*4+1]=cv.px[i*4+2]=cv.px[i*4+3]=om[i];
+        lcv_blur(&cv,gr);
+        gm=(uint8_t*)malloc((size_t)w*h);
+        if(gm) for(int i=0;i<w*h;i++) gm[i]=cv.px[i*4+3];
+        free(cv.px);
       }
     }
-    #undef HSET
-    s->w=w; s->h=h;
-    s->px=(uint8_t*)calloc((size_t)w*h,4);
-    if(!s->px){ s->w=s->h=0; continue; }
+    int ice=HF_ICE[f];
+    float top=(float)(pad-oy);                          /* the cap top's row in the sprite */
     for(int y=0;y<h;y++) for(int x=0;x<w;x++){
       uint8_t*o=s->px+((size_t)y*w+x)*4;
+      if(gm) hpx_over(o,0xFFAA28,gm[y*w+x]*150/255);
       if(x>=so && y>=so) hpx_over(o,0x000000,om[(y-so)*w+(x-so)]*170/255);
-      hpx_over(o,0x1A0C02,om[y*w+x]);
+      hpx_over(o,RIM[ice],om[y*w+x]);
       int fa=fm[y*w+x];
       if(fa){
-        float t=clampf((float)(y-pad)/(float)(7*px-1),0,1);
-        uint32_t col=ramp(PAL[HF_PAL[f]],5,t);
-        if(t<0.34f) col=mixc(col,0xFFFFFF,(0.34f-t)/0.34f*0.55f);
+        float t=clampf((y+0.5f-top)/capH,0,1);
+        uint32_t col = t<0.45f ? mixc(PAL[ice][0],PAL[ice][1],t/0.45f) : mixc(PAL[ice][1],PAL[ice][2],(t-0.45f)/0.55f);
         hpx_over(o,col,fa);
       }
     }
+    s->w=w; s->h=h;
+    hgox[f][ch-32]=ox-pad; hgoy[f][ch-32]=oy-pad;
     spr_bounds(s);
+    free(fm); free(om); free(gm);
   }
-  free(fm); free(om);
 }
 
-static int htext_w(const char*s,int f){
-  int n=(int)strlen(s), px=HF_PX[f];
-  return n>0 ? n*6*px-px : 0;
+static inline int hglyph_ix(const char*s,int i){
+  int ch=(unsigned char)s[i];
+  if(ch>='a'&&ch<='z') ch-=32;
+  if(ch<32||ch>95) ch='?';
+  return ch-32;
 }
-/* baked display type; align 0 left, 1 centre, 2 right; clipped to rows */
+static int htext_w(const char*s,int f){
+  float w=0;
+  for(int i=0;s[i];i++) w+=hadv[f][hglyph_ix(s,i)];
+  return (int)ceilf(w);
+}
+/* baked display type with its caps' top at y; align 0 left, 1 centre,
+   2 right; clipped to rows [cy0, cy1) */
 static void htext(const char*s,int x,int y,int f,int align,int cy0,int cy1){
-  int px=HF_PX[f], w=htext_w(s,f);
-  int ox = align==1 ? x-w/2 : (align==2 ? x-w : x);
+  int w=htext_w(s,f);
+  float pen=(float)(align==1 ? x-w/2 : (align==2 ? x-w : x));
   for(int i=0;s[i];i++){
-    int ch=(unsigned char)s[i];
-    if(ch>='a'&&ch<='z') ch-=32;
-    if(ch<32||ch>95) ch='?';
-    if(ch==' ') continue;
-    blit(&hglyph[f][ch-32], ox+i*6*px-hfpad[f], y-hfpad[f], cy0,cy1,255,0,0.0f);
+    int g=hglyph_ix(s,i);
+    if(hglyph[f][g].px) blit(&hglyph[f][g],(int)floorf(pen+0.5f)+hgox[f][g],y+hgoy[f][g],cy0,cy1,255,0,0.0f);
+    pen+=hadv[f][g];
   }
 }
 /* the biggest of the given sizes that fits, centred on (x, cy) */
 static void htext_fit(const char*s,int x,int cy,int maxw,const int*fonts,int nf,int cy0,int cy1){
   int f=fonts[nf-1];
   for(int i=0;i<nf;i++) if(htext_w(s,fonts[i])<=maxw){ f=fonts[i]; break; }
-  htext(s,x,cy-HF_PX[f]*7/2,f,1,cy0,cy1);
+  htext(s,x,cy-(int)(HF_CAP[f]*0.5f+0.5f),f,1,cy0,cy1);
 }
 
 /* credits on a coin: whole up to 9999, then K and M so it fits the band */
@@ -504,70 +534,123 @@ static void hold_bake_glow(spr_t*s,int size,float ring,float width,uint32_t col)
   spr_bounds(s);
 }
 
-static void lamp_paint(int on){
-  cv_circle(U(46.8f),U(48.2f),U(20.5f),0x000000,0x000000,150);
-  static const uint32_t ring[5]={0xFFFBE0,0xFFE27A,0xD8A01C,0x8E6208,0x4A3004};
-  pt_t p[48];
-  for(int i=0;i<48;i++){ float a=TAU*i/48.0f; p[i].x=U(46)+cosf(a)*U(19.4f); p[i].y=U(46)+sinf(a)*U(19.4f); }
-  cv_polyN(p,48,ring,5,255);
-  cv_circle(U(46),U(46),U(16.6f),0x2A1802,0x100800,255);
+/*  A respin lamp is one of the lounge's marquee bulbs, grown to lamp
+ *  size: unlit it is smoky amber glass in a brass rim, lit it burns
+ *  white-hot at the heart and honey at the edge, with its own light.
+ *  (draw_header adds the breathing halo on top.)                      */
+#define HLAMPR 17.0f
+static void hold_bake_lamp(spr_t*s,int on){
+  hspr_free(s);
+  const int sz=on?96:48;                   /* room for the lit glow to fade out */
+  const float c=sz*0.5f;
+  LCanvas cv;
+  if(!lz_cv_new(&cv,sz,sz)) return;
+  LShape disc[1]={{LSH_CIRCLE,LOP_UNION,{c,c,HLAMPR},NULL,0}};
   if(on){
-    cv_sphere(U(46),U(46),U(15.6f),0x8A1000,0xFF4A18,0xFFF6D0);
-    cv_circle(U(46),U(47),U(8.5f),0xFFFBE0,0xFFC050,120);
+    LFillOpt g={0};
+    g.glow=7;
+    LPaint p=lpaint_radial(lrc(1,1,0.94f,1),c-1.5f,c-2,lz_col(0xFFB838,1),HLAMPR);
+    lcv_fill(&cv,NULL,disc,1,&p,&g);
+    LFillOpt o={0};
+    o.outline=1.6f;
+    LPaint rim=lpaint_solid(lz_col(0xFFF0C0,0.7f));
+    lcv_fill(&cv,NULL,disc,1,&rim,&o);
   } else {
-    cv_sphere(U(46),U(46),U(15.6f),0x0A0203,0x3A0C0E,0x9A6464);
+    LPaint p=lpaint_radial(lz_col(0x5E3E22,1),c-3,c-3.5f,lz_col(0x1C1008,1),HLAMPR);
+    lcv_fill(&cv,NULL,disc,1,&p,NULL);
+    LFillOpt o={0};
+    o.outline=2.0f;
+    LPaint rim=lpaint_solid(lz_col(0xB08A40,0.85f));
+    lcv_fill(&cv,NULL,disc,1,&rim,&o);
   }
+  LShape hl[1]={{LSH_ELLIPSE,LOP_UNION,{c-5,c-7,5.5f,3.2f},NULL,0}};
+  LPaint hp=lpaint_solid(lrc(1,1,1,on?0.55f:0.30f));
+  lcv_fill(&cv,NULL,hl,1,&hp,NULL);
+  lz_cv_to_spr(&cv,s);
 }
 
-/* the board: deep crimson falling to black, a faint gold sunburst and
-   lattice, a header band, and twenty-five recessed gold-rimmed sockets.
-   Painted through the ordinary primitives into fb, then kept.  Called
-   at init (fb is scratch then) and, defensively, from update code.   */
+/*  A glass well painted into fb (build time): a dark fill, lit from
+ *  below, a thin neon tube round its edge and a little of the tube's
+ *  light spilling out - the poker game's ui_panel, slimmed down so
+ *  twenty-five of them read as one neon grid rather than a wall of
+ *  signs.                                                             */
+static void hold_well(int x,int y,int w,int h,float r,uint32_t neon,float glow_k,float tube_a,
+                      uint32_t top,uint32_t bot){
+  const int m=16;
+  LCanvas cv;
+  if(!lz_cv_new(&cv,w+2*m,h+2*m)) return;
+  float hw=w*0.5f, hh=h*0.5f, cx=m+hw, cy=m+hh;
+  LShape box[1]={{LSH_RBOX,LOP_UNION,{cx,cy,hw,hh,r},NULL,0}};
+  if(glow_k>0){
+    LFillOpt g={0};
+    g.outline=1.5f;
+    g.glow=6;
+    g.opacity=clampf(glow_k,0,1);
+    g.blend=LBL_ADD;
+    LPaint p=lpaint_solid(lz_col(neon,1));
+    lcv_fill(&cv,NULL,box,1,&p,&g);
+  }
+  LPaint fill=lpaint_linear(lz_col(top,0.95f),0,cy-hh,lz_col(bot,0.95f),0,cy+hh);
+  lcv_fill(&cv,NULL,box,1,&fill,NULL);
+  /* the glass: a faint sheen over the top third */
+  LShape shn[1]={{LSH_RBOX,LOP_UNION,{cx,cy-hh*0.62f,hw-4,hh*0.30f,r-4>2?r-4:2},NULL,0}};
+  LPaint sp=lpaint_linear(lrc(1,1,1,0.07f),0,cy-hh,lrc(1,1,1,0.0f),0,cy-hh*0.3f);
+  lcv_fill(&cv,NULL,shn,1,&sp,NULL);
+  LFillOpt ol={0};
+  ol.outline=1.6f;
+  LPaint tube=lpaint_solid(lz_col(lz_hot(neon,0.35f),tube_a));
+  lcv_fill(&cv,NULL,box,1,&tube,&ol);
+  lz_cv_to_fb(&cv,x-m,y-m);
+  free(cv.px);
+}
+
+/*  The board: the lounge's dark plum glass with its honeycomb, a glass
+ *  header with a magenta tube (the title in gold, the respin bulbs in a
+ *  dark well, the meter in another), and twenty-five glass wells, each
+ *  ringed in honey neon, which together are the board's neon grid.
+ *  Painted through the ordinary primitives and the kit's rasteriser into
+ *  fb, then kept.  Called at init (fb is scratch then) and, defensively,
+ *  from update code.                                                  */
 static void hold_build_backdrop(void){
   if(hbk) return;
   uint32_t*buf=(uint32_t*)malloc((size_t)GW*GH*4);
   if(!buf) return;
   float cx=GX+GW*0.5f, cy=HGY+(GH-HHEAD)*0.5f;
   for(int y=GY;y<GY+GH;y++) for(int x=GX;x<GX+GW;x++){
-    float dx=(x-cx)/380.0f, dy=(y-cy)/310.0f;
-    float d=sqrtf(dx*dx+dy*dy), v=clampf(1.0f-d,0,1);
-    uint32_t c=mixc(0x070103,0x96121E,clampf(v*v*1.25f,0,1));
-    float a=atan2f(dy,dx);
-    float rr=0.5f+0.5f*cosf(a*20.0f);
-    rr=rr*rr; rr=rr*rr; rr=rr*rr;
-    c=mixc(c,0xFFB848,rr*(0.10f+v*0.34f));
-    if(((x+y)%26)==0 || ((x-y+2600)%26)==0) c=mixc(c,0xE8B040,0.06f+v*0.10f);
+    float t=(float)(y-GY)/GH;
+    uint32_t c=mixc(0x1C0F22,0x08060A,t*(1.5f-0.5f*t));
+    float wx=(x-cx)/360.0f, wy=(y-cy)/300.0f, w=1.0f-(wx*wx+wy*wy);
+    if(w>0) c=mixc(c,0x3A1A2C,0.6f*w*w);
+    int q, r;
+    float e=lhex_grid_dist(x+0.5f,y+0.5f,30.0f,&q,&r);
+    float cov=1.0f-e/1.3f;
+    if(cov>0) c=mixc(c,LZ_HONEY,0.10f*cov);
+    else if(e<3.0f) c=scalec(c,0.92f);
     fb_px(x,y,c);
   }
-  /* a gold frame round the board */
-  fb_rframe(GX+2,HGY+1,GW-4,GH-HHEAD-3,10,2.0f,0xF0C24A,210);
-  fb_rframe(GX+5,HGY+4,GW-10,GH-HHEAD-9,8,1.0f,0x6A4A10,200);
-  /* header */
-  fb_rrectg(GX+4,GY+4,GW-8,HHEAD-8,12,0x3E080E,0x0C0204,255);
-  for(int j=0;j<14;j++) for(int i=10;i<GW-10;i++) fb_blend(GX+i,GY+6+j,0xFFFFFF,(14-j)*2);
-  fb_rframe(GX+4,GY+4,GW-8,HHEAD-8,12,1.5f,0xB8862A,230);
-  fb_rect(GX+10,HGY-3,GW-20,2,0xF0C24A,255);
-  fb_rect(GX+10,HGY-1,GW-20,1,0x5A3A08,255);
-  /* lamp plate */
-  fb_rrectg(GX+12,GY+10,190,62,11,0x1E0407,0x060102,255);
-  fb_rframe(GX+12,GY+10,190,62,11,1.5f,0xC8962E,230);
-  for(int i=0;i<3;i++) fb_rrect(LAMPX(i)-25,LAMPY-25,50,50,25,0x000000,190);
-  text("RESPINS",GX+107,GY+14,1,0xFFD98A,1,1);
-  /* meter */
-  led_window(METX,METY2,METW,METH2);
-  /* sockets */
+  /* the header: glass with a magenta tube, the title, the lamp well */
+  lz_glass(GX+6,GY+5,GW-12,HHEAD-13,LZ_MAGENTA,0.45f,1.0f);
+  { float sz=34.0f;
+    while(sz>20.0f && lz_width(LZF_DISP_M,"HOLD & SPIN",sz,0)>218.0f) sz-=1.0f;
+    lz_gold(LZF_DISP_M,"HOLD & SPIN",GX+GW*0.5f,GY+24.0f,sz,1.0f,0.55f); }
+  lz_well(GX+14,GY+11,186,58,10.0f);
+  { lz_style st; memset(&st,0,sizeof st);
+    st.color=lz_hot(LZ_HONEY,0.35f); st.align=LZ_CENTER; st.spacing=2.0f;
+    lz_text_ex(LZF_UI_S,"RESPINS",GX+107.0f,GY+11.0f,13.0f,&st); }
+  for(int i=0;i<3;i++){
+    lz_dot((float)LAMPX(i),(float)LAMPY+1,HLAMPR+4.0f,0x000000,150);
+    lz_dot((float)LAMPX(i),(float)LAMPY,HLAMPR+2.5f,0x07050A,255);
+  }
+  /* the meter: a dark well in a honey tube */
+  hold_well(METX,METY2,METW,METH2,9.0f,LZ_HONEY,0.60f,1.00f,0x07050A,0x16101C);
+  /* sockets: the neon grid */
   for(int c2=0;c2<NCELL;c2++){
     int r=c2/NROW, row=c2%NROW;
     int sx=GX+r*CW+6, sy=HGY+row*HCH+4, w=CW-12, h=HCH-8;
-    fb_rrect(sx-2,sy-1,w+4,h+4,15,0x000000,170);
-    fb_rrectg(sx,sy,w,h,14,0x040001,0x2A070B,222);          /* the sunburst glints through */
-    for(int j=0;j<8;j++) for(int i=8;i<w-8;i++) fb_blend(sx+i,sy+2+j,0x000000,(8-j)*18);
+    hold_well(sx,sy,w,h,12.0f,LZ_HONEY,0.50f,0.90f,0x07050A,0x1C1222);
     /* where a coin will sit: a faint struck ring */
     int ccx=sx+w/2, ccy=sy+h/2;
-    fb_rframe(ccx-37,ccy-37,74,74,37,1.4f,0x8A5A22,60);
-    fb_rframe(ccx-31,ccy-31,62,62,31,1.0f,0x5A3A18,45);
-    fb_rframe(sx,sy,w,h,14,1.6f,0xC8962E,215);
-    fb_rframe(sx+3,sy+3,w-6,h-6,11,1.0f,0x5A1A10,150);
+    fb_rframe(ccx-35,ccy-35,70,70,35,1.2f,LZ_HONEY,34);
   }
   for(int y=0;y<GH;y++) memcpy(buf+(size_t)y*GW,fb+(size_t)(GY+y)*FBW+GX,(size_t)GW*4);
   hbk=buf;
@@ -637,9 +720,9 @@ static void hold_dim_copy(const spr_t*src,spr_t*dst){
   spr_bounds(dst);
 }
 
-/*  A turning cell is lit from inside like a reel drum: dark at the lips,
- *  a hot crimson band across the middle, and faint vertical speed
- *  streaks.  Sized to sit just inside a socket's gold rim.            */
+/*  A turning cell is lit from inside like a reel drum: dark plum glass
+ *  at the lips, a warm honey band across the middle, and faint vertical
+ *  speed streaks.  Sized to sit just inside a well's neon tube.       */
 #define HSPW (CW-16)
 #define HSPH (HCH-12)
 static void hold_bake_spin(void){
@@ -652,15 +735,15 @@ static void hold_bake_spin(void){
   for(int y=0;y<HSPH;y++){
     float t=(y+0.5f)/HSPH;
     float f=sinf(t*3.14159f); f=f*sqrtf(f);
-    uint32_t base=mixc(0x0E0103,0x6A1210,f);
-    base=mixc(base,0xE0602A,f*f*f*f*f*f*0.42f);
+    uint32_t base=mixc(0x0A060C,0x4A2418,f);
+    base=mixc(base,0xE89A34,f*f*f*f*f*f*0.40f);
     for(int x=0;x<HSPW;x++){
-      float d=rr_sdf(x+0.5f,y+0.5f,hw,hh,hw,hh,12.0f);
+      float d=rr_sdf(x+0.5f,y+0.5f,hw,hh,hw,hh,10.0f);
       float a=clampf(0.5f-d,0,1);
       if(a<=0) continue;
       uint32_t c=base;
       uint32_t h=(uint32_t)x*0x9E3779B1u; h^=h>>13; h*=0x85EBCA77u; h^=h>>16;
-      if((h&7u)==0) c=mixc(c,0xFFC070,0.10f+0.14f*f);          /* speed streaks */
+      if((h&15u)==0) c=mixc(c,0xFFC070,0.08f+0.12f*f);          /* speed streaks */
       float e=fabsf(x+0.5f-hw)/hw;                                /* drum curvature */
       if(e>0.80f) c=scalec(c,1.0f-(e-0.80f)*1.6f);
       uint8_t*o=s->px+((size_t)y*HSPW+x)*4;
@@ -680,14 +763,11 @@ static void art_coin(void){
   }
   hold_bake_ring(&hring[0],46.0f,4.5f,0xFFC850);
   hold_bake_ring(&hring[1],46.0f,4.5f,0x6AC8FF);
-  hold_bake_ring(&hring[2],46.0f,4.5f,0xFF5030);
+  hold_bake_ring(&hring[2],46.0f,4.5f,0xFF3C78);          /* the MAJOR's, ruby-magenta */
   hold_bake_ring(&bring,   55.0f,5.0f,0xFFC850);
-  hold_bake_glow(&hhalo,    96,0,0,0xFF7A30);
+  hold_bake_glow(&hhalo,    72,0,0,0xFFB040);
   hold_bake_glow(&hspark,   56,0,0,0xFFE8A0);
-  for(int on=0;on<2;on++){
-    hspr_free(&hlamp[on]);
-    cv_clear(); lamp_paint(on); cv_resolve(&hlamp[on]); spr_bounds(&hlamp[on]);
-  }
+  for(int on=0;on<2;on++) hold_bake_lamp(&hlamp[on],on);
   for(int f=0;f<HF_N;f++) hold_bake_font(f);
   free(hbk); hbk=NULL;
   hold_build_backdrop();
@@ -980,10 +1060,11 @@ static uint32_t hold_hash(uint32_t a,uint32_t b){
 
 /* value or label on a coin whose cartouche is centred on (cx, by) */
 static void hold_coin_text(long long v,int lab,int cx,int by,int maxw,int cy0,int cy1){
-  if(lab==HL_MINOR){ htext("MINOR",cx,by-7,HF_I2,1,cy0,cy1); return; }
-  if(lab==HL_MAJOR){ htext("MAJOR",cx,by-7,HF_G2,1,cy0,cy1); return; }
+  int jy=by-(int)(HF_CAP[HF_S]*0.5f+0.5f);
+  if(lab==HL_MINOR){ htext("MINOR",cx,jy,HF_IS,1,cy0,cy1); return; }
+  if(lab==HL_MAJOR){ htext("MAJOR",cx,jy,HF_S,1,cy0,cy1); return; }
   char b[16]; hold_fmt(v,b,sizeof b);
-  static const int F[3]={HF_G4,HF_G3,HF_G2};
+  static const int F[3]={HF_L,HF_M,HF_S};
   htext_fit(b,cx,by,maxw,F,3,cy0,cy1);
 }
 
@@ -1008,7 +1089,7 @@ static void hold_cells_base(int hot){
         /* landed, not yet valued: the value arrives when every reel is down */
         float pl=0.5f+0.5f*sinf(G.t*9.0f+c);
         if(still) hring_add(&bring,cx,sy+SYMH/2,(int)(60+60*pl),GY,GY+GH);
-        htext("?",cx,by-10,HF_G3,1,GY,GY+GH);
+        htext("?",cx,by-(int)(HF_CAP[HF_L]*0.5f),HF_L,1,GY,GY+GH);
         continue;
       }
       int lab=H->lab[c];
@@ -1034,7 +1115,7 @@ static void hold_draw_cells(void){ hold_cells_base(0); }
 /* -- the board ---------------------------------------------------- */
 static void hold_paint_window(int dark){
   int y0=GY>clip_y0?GY:clip_y0, y1=(GY+GH)<clip_y1?(GY+GH):clip_y1;
-  if(!hbk){ for(int y=y0;y<y1;y++) for(int x=GX;x<GX+GW;x++) fb_px(x,y,0x100204); return; }
+  if(!hbk){ for(int y=y0;y<y1;y++) for(int x=GX;x<GX+GW;x++) fb_px(x,y,0x0E0A12); return; }
   for(int y=y0;y<y1;y++){
     const uint32_t*src = (dark && hbkD && y>=HGY) ? hbkD : hbk;   /* the header stays lit */
     memcpy(fb+(size_t)y*FBW+GX,src+(size_t)(y-GY)*GW,(size_t)GW*4);
@@ -1122,7 +1203,7 @@ static void hold_draw_spin(int c,int x0,int y0){
     float sp = next ? 16.0f : 5.0f;
     float pl=0.5f+0.5f*sinf(H->tt*sp);
     if(opt_limiter) pl=0.4f+pl*0.4f;
-    uint32_t col = next ? 0xFFE060 : 0xC89030;
+    uint32_t col = next ? LZ_GOLD : LZ_HONEY;
     fb_rframe(x0+4,y0+2,CW-8,HCH-4,15,next?3.5f:2.0f,col,(int)((next?150:90)+100*pl));
     if(next && left<0.8f)
       hring_add(&hring[0],x0+CW/2,y0+HCH/2,(int)(80+140*pl),cy0-6,cy1+6);
@@ -1131,7 +1212,7 @@ static void hold_draw_spin(int c,int x0,int y0){
 
 static void hold_draw_header(void){
   const hold_state_t*H=&G.hold;
-  /* the lamps */
+  /* the respin bulbs */
   int lit=H->respins;
   if(H->phase==HP_READY) lit=H->lampsLit;
   else if(H->phase==HP_SPIN && H->relit) lit=HOLD_SPINS;
@@ -1140,20 +1221,19 @@ static void hold_draw_header(void){
   float fl = H->lampT<0.7f ? 1.0f-H->lampT/0.7f : 0.0f;
   for(int i=0;i<HOLD_SPINS;i++){
     int x=LAMPX(i), y=LAMPY, on=(i<lit);
+    const spr_t*L=&hlamp[on];
     if(on){
       float pl=0.75f+0.25f*sinf(H->tt*5.0f+i*1.1f);
-      hblit_add(&hhalo,x-hhalo.w/2,y-hhalo.h/2,(int)(150*pl+100*fl),GY,HGY);
+      hblit_add(&hhalo,x-hhalo.w/2,y-hhalo.h/2,(int)(90*pl+130*fl),GY,HGY);
     }
-    blit(&hlamp[on],x-53,y-53,GY,HGY,255,0,0.0f);
+    blit(L,x-L->w/2,y-L->h/2,GY,HGY,255,0,0.0f);
     if(on && fl>0){
-      blit_wash(&hlamp[1],x-53,y-53,GY,HGY,0xFFFFFF,fl*0.8f);
+      blit_wash(L,x-L->w/2,y-L->h/2,GY,HGY,0xFFFFFF,fl*0.8f);
       hold_ring(x,y,22.0f+(1.0f-fl)*40.0f,0xFFE8A0,(int)(fl*230),GY,HGY);
     }
   }
-  /* title and status */
-  htext("HOLD & SPIN",GX+GW/2,GY+12,HF_G3,1,GY,HGY);
-  /* two lines under the title, at most 19 characters of the px-2 type
-     fit between the lamps and the meter */
+  /* the status under the title (baked into the board): what the board
+     holds, and a hint in small spaced capitals */
   char b[48]; const char*hint="FILL ALL 25 FOR THE GRAND";
   int hot=0;
   if(H->phase==HP_COLLECT){
@@ -1165,16 +1245,34 @@ static void hold_draw_header(void){
     snprintf(b,sizeof b,"%d OF 25 COINS",H->locked);
     if(H->locked>=HOLD_HOTN){ hint="GRAND IN REACH"; hot=1; }
   }
-  text(b,GX+GW/2,GY+40,2,0xFFE9C8,1,1);
-  if(hot){
-    float hb=hold_heart(H->tt); if(opt_limiter) hb*=0.6f;
-    text(hint,GX+GW/2,GY+59,2,mixc(0xFF4A3A,0xFFFFFF,clampf(hb,0,1)),1,1);
-  } else if(hint[0]) text(hint,GX+GW/2,GY+62,1,H->phase==HP_GRAND?0xFFD24A:0xC89A6A,1,1);
-  /* the meter */
+  lz_text_sh(LZF_UI_M,b,GX+GW*0.5f,(float)GY+37,20.0f,LZ_IVORY,LZ_CENTER);
+  if(hint[0]){
+    lz_style st; memset(&st,0,sizeof st);
+    st.align=LZ_CENTER; st.spacing=1.5f;
+    st.shadow=0x000000; st.shadow_k=0.8f;
+    st.color = H->phase==HP_GRAND ? LZ_GOLD : lz_hot(LZ_HONEY,0.15f);
+    if(hot){
+      /* the heartbeat, in magenta neon */
+      float hb=hold_heart(H->tt); if(opt_limiter) hb*=0.6f;
+      st.color=mixc(LZ_MAGENTA,0xFFFFFF,clampf(hb*0.7f,0,1));
+      st.glow=LZ_MAGENTA; st.glow_k=0.3f+0.5f*clampf(hb,0,1);
+    }
+    lz_text_ex(LZF_UI_S,hint,GX+GW*0.5f,(float)GY+55,14.0f,&st);
+  }
+  /* the meter: its caption, and the gold readout */
   int win=(H->phase==HP_COLLECT||H->phase==HP_SLAM);
-  text(win?"WIN":"TOTAL",METX+10,METY2+6,1,win?0xFFE9A8:0xFFB08A,0,1);
-  uint32_t on=win?mixc(0xFFB020,0xFFFFFF,0.25f+0.25f*sinf(H->tt*9.0f)):0xFF8A30;
-  seg_num(H->shown,METX+METW-10,METY2+19,9,13,32,on,0x4A2406,1);
+  { lz_style st; memset(&st,0,sizeof st);
+    st.align=LZ_LEFT; st.spacing=2.0f;
+    st.color = win ? LZ_GOLD : lz_hot(LZ_HONEY,0.3f);
+    lz_text_ex(LZF_UI_S,win?"WIN":"TOTAL",(float)METX+12,(float)METY2+4,13.0f,&st); }
+  uint32_t on=win?mixc(LZ_GOLD,0xFFFFFF,0.15f+0.2f*sinf(H->tt*9.0f)):LZ_GOLD;
+  seg_num(H->shown,METX+METW-12,METY2+21,9,13,30,on,0,1);
+  /* a coin just banked lights the meter's tube */
+  if(H->phase==HP_COLLECT && H->cur>=0 && H->colDone[H->cur] && H->colT<0.70f){
+    float k=1.0f-clampf((H->colT-0.24f)/0.46f,0,1);
+    fb_rframe(METX-2,METY2-2,METW+4,METH2+4,11,2.0f,LZ_GOLD,(int)(k*120));
+    fb_rframe(METX,METY2,METW,METH2,9,1.8f,lz_hot(LZ_GOLD,0.6f),(int)(k*230));
+  }
 }
 
 /* the collect flight: a comet from the coin to the meter */
@@ -1202,7 +1300,7 @@ static void hold_draw_flight(void){
   if(v>=0 && u<1){
     char b[24], t[16]; hold_fmt(v,t,sizeof t);
     snprintf(b,sizeof b,"+%s",t);
-    htext(b,HMETCX,METY2+METH2+3+(int)(u*8),HF_G3,1,GY,GY+GH);
+    htext(b,HMETCX,METY2+METH2+5+(int)(u*8),HF_T,1,GY,GY+GH);
   }
 }
 
@@ -1244,28 +1342,58 @@ static void hold_rays(int cx,int cy,int r0,int r1,int n,float ang,uint32_t col,i
   }
 }
 
+/* a neon tube across the window at row y: a hot core and its light
+   falling away either side, brighter with pw */
+static void hold_tube(int y,uint32_t neon,float pw){
+  if(!rows_visible(y-12,y+13)) return;
+  /* the glass tube itself: three rows, white-hot in the middle */
+  fb_rect(GX,y-1,GW,3,lz_hot(neon,0.25f),255);
+  fb_rect(GX,y,GW,1,lz_hot(neon,0.6f+0.3f*pw),255);
+  /* its light, added: the band's dark glass takes it as a glow */
+  int cr=(neon>>16)&255, cg=(neon>>8)&255, cb=neon&255;
+  for(int d=2;d<=12;d++){
+    int k=(int)(256*(0.45f+0.30f*pw)*expf(-(float)((d-1)*(d-1))/14.0f));
+    if(k<=0) continue;
+    int r=cr*k>>8, g=cg*k>>8, b=cb*k>>8;
+    for(int s=-1;s<=1;s+=2){
+      int yy=y+s*d;
+      if(!in_band(yy)) continue;
+      for(int x=GX;x<GX+GW;x++) fb_add(x,yy,r,g,b);
+    }
+  }
+}
+
+/* SPIN TO COLLECT, with the panel icon lit where SPIN is, centred on cx */
+static void hold_prompt_collect(int cx,int y){
+  const char*s="SPIN TO COLLECT";
+  const float ih=20.0f, sz=24.0f, gap=12.0f;
+  float tw=lz_width(LZF_UI_M,s,sz,1.5f), iw=lz_icon_w(ih), x0=cx-(iw+gap+tw)*0.5f;
+  lz_icon(x0,(float)y+2,ih,wp_mask(B_A|B_START),LZ_GOLD,255);
+  lz_style st; memset(&st,0,sizeof st);
+  st.align=LZ_LEFT; st.spacing=1.5f; st.color=LZ_IVORY;
+  st.shadow=0x000000; st.shadow_k=0.85f;
+  lz_text_ex(LZF_UI_M,s,x0+iw+gap,(float)y-2,sz,&st);
+}
+
 static void hold_draw_slam(void){
   const hold_state_t*H=&G.hold;
   if(H->phase!=HP_SLAM) return;
   int cx=GX+GW/2, cy=HGY+224;
   float pl=0.5f+0.5f*sinf(H->tt*6.0f);
   if(opt_limiter) pl=0.3f+pl*0.4f;
-  hold_rays(cx,cy,40,330,18,H->tt*0.45f,0xFFB030,(int)(120+70*pl));
-  /* the band */
+  hold_rays(cx,cy,40,330,18,H->tt*0.45f,0xFFB030,(int)(110+60*pl));
+  /* the band: a dark glass strip between two magenta tubes */
   int bh=220, by=cy-bh/2;
   hold_darken(GX,by,GW,bh);
-  for(int j=0;j<3;j++){
-    uint32_t rc=mixc(0xF0C24A,0xFFFFFF,pl*0.5f);
-    fb_rect(GX,by+j,GW,1,j==1?rc:0x8A5A10,255);
-    fb_rect(GX,by+bh-1-j,GW,1,j==1?rc:0x8A5A10,255);
-  }
-  htext("HOLD & SPIN WIN",cx,by+16,HF_G3,1,GY,GY+GH);
+  hold_tube(by,LZ_MAGENTA,pl);
+  hold_tube(by+bh-1,LZ_MAGENTA,pl);
+  lz_neon(LZF_NEON_M,"HOLD & SPIN WIN",(float)cx,(float)by+32,36.0f,LZ_AMBER,1.0f,1.0f);
   char b[32]; commas(b,sizeof b,H->total);
   float u=clampf(H->pt/0.32f,0,1);
   int dy=(int)((1.0f-easeOutBack(u))*-160.0f);
-  int f = htext_w(b,HF_G9)<=GW-60 ? HF_G9 : HF_G4;
-  int ty = f==HF_G9 ? by+58 : by+84;
-  hblit_add(&glowspr,cx-glowspr.w/2,by+bh/2-glowspr.h/2,(int)(110+90*pl),by+3,by+bh-3);
+  int f = htext_w(b,HF_XL)<=GW-60 ? HF_XL : HF_XM;
+  int ty = f==HF_XL ? by+62 : by+78;
+  hblit_add(&glowspr,cx-glowspr.w/2,by+bh/2-glowspr.h/2,(int)(90+80*pl),by+3,by+bh-3);
   htext(b,cx,ty+dy,f,1,by+3,by+bh-3);
   if(H->pt<0.50f){
     float v=1.0f-H->pt/0.50f;
@@ -1273,25 +1401,28 @@ static void hold_draw_slam(void){
     hblit_add(&glowspr,cx-glowspr.w/2-w2,by+bh/2-glowspr.h/2,(int)(v*255),GY,GY+GH);
     hblit_add(&glowspr,cx-glowspr.w/2+w2,by+bh/2-glowspr.h/2,(int)(v*255),GY,GY+GH);
     hold_ring(cx,by+bh/2,60.0f+(1.0f-v)*300.0f,0xFFE08A,(int)(v*230),GY,GY+GH);
-    hold_ring(cx,by+bh/2,40.0f+(1.0f-v)*180.0f,0xFFFFFF,(int)(v*160),GY,GY+GH);
+    hold_ring(cx,by+bh/2,40.0f+(1.0f-v)*180.0f,0xFF9AE6,(int)(v*160),GY,GY+GH);
   }
   /* twinkles scattered round the band, a hash of their index and time */
   for(int i=0;i<14;i++){
     uint32_t h=hold_hash((uint32_t)i,(uint32_t)(H->tt*3.0f));
     float tw=0.5f+0.5f*sinf(H->tt*9.0f+i*1.7f);
     int x=GX+20+(int)(h%(GW-40)), y=HGY+16+(int)((h>>12)%(GH-HHEAD-32));
-    if(y>by-6 && y<by+bh+6) continue;
+    if(y>by-10 && y<by+bh+10) continue;
     int r=2+(int)(tw*5), a=(int)(tw*230);
-    for(int k=-r;k<=r;k++){ fb_blend(x+k,y,0xFFF4D0,a); fb_blend(x,y+k,0xFFF4D0,a); }
+    uint32_t tc=(i%3)==0 ? 0xFFB0EC : 0xFFF4D0;         /* a few in magenta */
+    for(int k=-r;k<=r;k++){ fb_blend(x+k,y,tc,a); fb_blend(x,y+k,tc,a); }
   }
   char m[48];
   long long bet=TOTBET;
   long long x10=bet>0 ? H->total*10/bet : 0;
   if(x10%10) snprintf(m,sizeof m,"%lld.%lld X BET",x10/10,x10%10);
   else       snprintf(m,sizeof m,"%lld X BET",x10/10);
-  text(m,cx,by+bh-50,3,0xFFE9C8,1,1);
-  if(H->pt>1.3f && (((int)(H->pt*2.2f))&1))
-    text("PRESS START TO COLLECT",cx,by+bh+14,2,0xFFFFFF,1,1);
+  { lz_style st; memset(&st,0,sizeof st);
+    st.align=LZ_CENTER; st.spacing=2.0f; st.color=LZ_IVORY;
+    st.shadow=0x000000; st.shadow_k=0.85f;
+    lz_text_ex(LZF_UI_L,m,(float)cx,(float)by+bh-56,34.0f,&st); }
+  if(H->pt>1.3f && (((int)(H->pt*2.2f))&1)) hold_prompt_collect(cx,by+bh+16);
 }
 
 /* a diagonal sweep of light across the board */
@@ -1322,17 +1453,14 @@ static void hold_draw_grand(void){
   float pl=0.5f+0.5f*sinf(H->tt*7.0f);
   if(opt_limiter) pl=0.3f+pl*0.4f;
   hold_darken(GX,by,GW,bh);
-  hold_rays(cx,cy,30,250,14,-H->tt*0.6f,0xFF5A2A,(int)(60+50*pl));
-  for(int j=0;j<3;j++){
-    uint32_t rc=mixc(0xFF5A3A,0xFFFFFF,pl*0.6f);
-    fb_rect(GX,by+j,GW,1,j==1?rc:0x8A1A10,255);
-    fb_rect(GX,by+bh-1-j,GW,1,j==1?rc:0x8A1A10,255);
-  }
-  hblit_add(&glowspr,cx-glowspr.w/2,cy-40-glowspr.h/2,(int)(120+100*pl),by+3,by+bh-3);
-  htext("GRAND",cx,by+22,HF_G9,1,by+3,by+bh-3);
+  hold_rays(cx,cy,30,250,14,-H->tt*0.6f,LZ_MAGENTA,(int)(50+45*pl));
+  hold_tube(by,LZ_MAGENTA,pl);
+  hold_tube(by+bh-1,LZ_MAGENTA,pl);
+  hblit_add(&glowspr,cx-glowspr.w/2,cy-40-glowspr.h/2,(int)(110+90*pl),by+3,by+bh-3);
+  htext("GRAND",cx,by+26,HF_XL,1,by+3,by+bh-3);
   char b[48], v[32]; commas(v,sizeof v,H->grandAmt);
   snprintf(b,sizeof b,"MEGA POT  %s",v);
-  htext(b,cx,by+bh-50,HF_G3,1,by+3,by+bh-3);
+  lz_neon(LZF_NEON_M,b,(float)cx,(float)by+bh-40,36.0f,LZ_MAGENTA,1.0f,0.7f+0.3f*pl);
 }
 
 /* half brightness over one reel cell, for the trigger's spotlight */
@@ -1357,8 +1485,9 @@ static void hold_draw(void){
   }
   hold_paint_window(H->phase==HP_SLAM);
 
-  /* heartbeat: the board's edge throbs red - straight bands, twelve
-     pixels deep, fading inward (a stack of rounded frames cost ~1 ms) */
+  /* heartbeat: the board's edge throbs ruby-magenta neon - straight
+     bands, twelve pixels deep, fading inward (a stack of rounded frames
+     cost ~1 ms) */
   if(H->locked>=HOLD_HOTN && H->locked<NCELL && (H->phase==HP_SPIN||H->phase==HP_READY)){
     float hb=hold_heart(H->tt); if(opt_limiter) hb*=0.6f;
     if(hb>0.02f){
@@ -1366,10 +1495,10 @@ static void hold_draw(void){
       for(int k=0;k<12;k++){
         int a=(int)(hb*(210-k*17)); if(a<=0) break;
         int t=HGY+k, b=GY+GH-1-k;
-        if(t>=y0 && t<y1) for(int i=k;i<GW-k;i++) fb_blend(GX+i,t,0xFF1A1A,a);
-        if(b>=y0 && b<y1) for(int i=k;i<GW-k;i++) fb_blend(GX+i,b,0xFF1A1A,a);
+        if(t>=y0 && t<y1) for(int i=k;i<GW-k;i++) fb_blend(GX+i,t,HBEAT,a);
+        if(b>=y0 && b<y1) for(int i=k;i<GW-k;i++) fb_blend(GX+i,b,HBEAT,a);
         for(int y=(HGY+k>y0?HGY+k:y0);y<(GY+GH-k<y1?GY+GH-k:y1);y++){
-          fb_blend(GX+k,y,0xFF1A1A,a); fb_blend(GX+GW-1-k,y,0xFF1A1A,a);
+          fb_blend(GX+k,y,HBEAT,a); fb_blend(GX+GW-1-k,y,HBEAT,a);
         }
       }
     }
@@ -1390,7 +1519,7 @@ static void hold_draw(void){
       hold_draw_spin(c,x0,y0);
     } else if(H->phase==HP_SPIN && H->pt-H->stopAt[c]<0.22f && H->pt>=H->stopAt[c]){
       float u=(H->pt-H->stopAt[c])/0.22f;
-      fb_rframe(x0+6,y0+4,CW-12,HCH-8,14,2.0f,0xE8B050,(int)((1.0f-u)*200));
+      fb_rframe(x0+6,y0+4,CW-12,HCH-8,12,2.0f,lz_hot(LZ_HONEY,0.4f),(int)((1.0f-u)*200));
     }
   }
   hold_draw_grand();
