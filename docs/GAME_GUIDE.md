@@ -1,4 +1,4 @@
-# WILD 7's - the player's guide
+# Beese's WILD 7'S - the player's guide
 
 Everything about playing WILD 7's on the cabinet: the screen, the
 controls, how a win is made, every multiplier and exactly when it goes up
@@ -32,7 +32,7 @@ Contents
 ## 1. The screen
 
 ```
-+----------------------- MARQUEE (ticker, logo) ------------------------+
++------------- MARQUEE (ticker, the Beese's WILD 7'S sign) --------------+
 | PROGRESSIVE JACKPOTS |                                | CREDITS        |
 |  ULTIMATE            |                                | BET            |
 |  MEGA / MAJOR / MINOR|        THE REELS  5 x 5        | WIN            |
@@ -40,7 +40,7 @@ Contents
 | FREE SPINS|MULTIPLIER|                                | CONTROLS       |
 |----------------------|                                |----------------|
 | HOW TO WIN           |                                | LAST WIN       |
-+-- PAYS -- BET LESS -- BET MORE -- BET MAX -- ADD CREDITS ----- (SPIN) -+
++-- PAYS -- BET LESS -- BET MORE -- ADD CREDITS -- BET MAX ----- (SPIN) -+
 ```
 
 - **Marquee** (top): the ticker scrolls the rules and the live ULTIMATE
@@ -286,7 +286,7 @@ holding; a wrong call loses it. See section 13.
 ## 7. The spin, and what happens after it
 
 - The reels stop **one at a time with an uneven gap** of half a second
-  to two seconds, different every spin. START, A or B slams them all down.
+  to two seconds, different every spin. SPIN slams them all down.
   The Turbo option halves the gaps.
 - **Anticipation**: when two scatters, two crowns or two wheels are
   already showing, the remaining reels are held back an extra second and
@@ -320,7 +320,7 @@ holding; a wrong call loses it. See section 13.
 - **3 CROWNS** (they land on reels 1, 3 and 5).
 - Nine hidden panels: five hold credits (0.7x, 1x, 1.7x, 2.5x and 3.4x the
   bet), one holds **X2**, three hold **STOP**.
-- D-pad moves, A turns a panel. The round ends on the **third STOP**, so
+- The stick moves, SPIN turns a panel. The round ends on the **third STOP**, so
   you usually get four or five picks.
 - At the end, everything collected is multiplied by the multiplier (X1,
   or X2 if you found it) and paid.
@@ -350,7 +350,7 @@ holding; a wrong call loses it. See section 13.
 ## 11. WHEEL OF 7'S
 
 - **One WHEEL on each of reels 2, 3 and 4.**
-- A giant wheel with chasing bulbs comes up. **Press A** (or START, or B)
+- A giant wheel with chasing bulbs comes up. **Press SPIN**
   **to spin** - it spins itself after about 6 seconds (3.5 on the SUPER
   WHEEL).
 - 24 wedges: **5x to 250x the bet**, the **MINOR** and **MAJOR**
@@ -372,17 +372,17 @@ holding; a wrong call loses it. See section 13.
 - Then the spin is scored with its new wilds - and every wild doubles the
   ways through it, so storms pay well: nearly all pay at least the bet,
   and about 1 in 40 pays 20x or more.
-- START, A or B plays the storm three times faster.
+- SPIN plays the storm three times faster.
 
 ## 13. GAMBLE
 
 - After any **base-game** win of up to **50 times the bet** has finished
-  counting, **press X** (the reel bezel shows "X = GAMBLE").
+  counting, **press BET MAX** (the reel bezel shows "GAMBLE" with the BET MAX icon).
 - A card is dealt face down:
-  - **LEFT = RED, RIGHT = BLACK**: a right call **doubles** the win;
-  - **UP / DOWN** chooses a suit, **X** plays it: a right call
+  - **STICK LEFT = RED, STICK RIGHT = BLACK**: a right call **doubles** the win;
+  - **STICK UP / DOWN** chooses a suit, **BET MAX** plays it: a right call
     **quadruples** it;
-  - **A, START or B collects** what you hold (30 seconds idle collects too).
+  - **SPIN collects** what you hold (30 seconds idle collects too).
 - A wrong call loses the win.
 - Up to **5 rounds**, and you can go again only while the win is still
   within 50x the bet. The last five cards show along the top.
@@ -429,10 +429,12 @@ celebration; the ULTIMATE adds fireworks.
 - **Attract**: after 25 seconds without a button, the machine shows off:
   the logo and the ULTIMATE pot, the features one by one, the jackpots.
   Any button returns to the game.
-- **Pay table** (SELECT): three pages, SELECT to turn, any other button to
+- **Pay table** (PAYS): four pages, PAYS to turn, any other button to
   go back. Page 1 PAY TABLE (every symbol), page 2 FEATURES (the wild,
   free spins, the pick, the jackpots), page 3 MORE FEATURES (HOLD & SPIN,
-  the WHEEL, 7 STRIKE, the GAMBLE).
+  the WHEEL, 7 STRIKE, the GAMBLE), page 4 CONTROLS (where every button
+  is; every button lights up there, so only SPIN or START leaves it -
+  section 2).
 - **Options** (RetroArch Quick Menu > Core Options, or `wild7.w7`):
   Sound, Music, Turbo spin, Flash limiter (on by default: damps flashes,
   shake and lightning), Render threads.
