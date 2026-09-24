@@ -36,12 +36,17 @@ install -d "$CONF_DIR"
   echo '# 22 = core provided. The core renders 1280x720 and declares 16:9;'
   echo '# forcing 4:3 here would letterbox it inside a pillarbox.'
   echo 'aspect_ratio_index = "22"'
-  if [[ -f "$SHADER" ]]; then
+  if [[ "${WILD7_CRT:-0}" = 1 && -f "$SHADER" ]]; then
     echo ''
-    echo '# CRT shader. zfast_crt_curve is the one preset on this box that adds'
-    echo '# curvature and scanlines without shifting the palette.'
+    echo '# CRT shader (WILD7_CRT=1). zfast_crt_curve is the one preset on this'
+    echo '# box that adds curvature and scanlines without shifting the palette.'
     echo 'video_shader_enable = "true"'
     echo "video_shader = \"$SHADER\""
+  else
+    echo ''
+    echo '# No shader: the lounge look is neon and fine type, crisp at 2x, like'
+    echo '# the poker game. Install with WILD7_CRT=1 for the old CRT curve.'
+    echo 'video_shader_enable = "false"'
   fi
 } > "$CONF_DIR/retroarch.cfg"
 

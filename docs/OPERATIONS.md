@@ -21,7 +21,7 @@ give; put it in a scratch file for the session and delete the file after.
 | address | `<pi-address>` on your LAN, SSH port 22, user `pi` |
 | auth | **password only, deliberately.** No SSH key goes on this box and `~/.ssh` should not exist there. |
 | sudo | `pi` has passwordless sudo |
-| display | 3440x1440 cabinet screen; the port runs RetroArch's `zfast_crt_curve` shader |
+| display | 3440x1440 cabinet screen; the core's 1280x720 shown crisp at 2x (no shader since the lounge look; `WILD7_CRT=1` at install brings back `zfast_crt_curve`) |
 | tools on the Pi | `git`, `gcc`, `make`, `curl`, `python3`, `zellij`. No Node, no Claude Code. |
 
 The core renders 1280x720 and declares 16:9; the port config sets
@@ -35,7 +35,8 @@ The core renders 1280x720 and declares 16:9; the port config sets
 | `/opt/retropie/libretrocores/lr-wild7/wild7_libretro.so` | **the core RetroArch loads** |
 | `~/RetroPie/roms/ports/wild7/` | the "ROM" `wild7.w7`, a copy of the core and the `.info`, source tarballs |
 | `~/RetroPie/roms/ports/Wild 7s.sh` | the Ports launcher EmulationStation lists (`runcommand.sh 0 _PORT_ wild7 .../wild7.w7`) |
-| `/opt/retropie/configs/ports/wild7/retroarch.cfg` | port RetroArch config (includes `all/retroarch.cfg`, `video_smooth = false`, aspect 22, the CRT shader) |
+| `/opt/retropie/configs/ports/wild7/retroarch.cfg` | port RetroArch config (includes `all/retroarch.cfg`, `video_smooth = false`, aspect 22, `video_shader_enable = false`) |
+| `~/RetroPie/roms/ports/wild7/wild7_panel.cfg` | where each panel button is wired (LEARN PANEL writes it; RetroArch's save directory, which on this cabinet is the content folder). Delete it to be asked again on the next start. |
 | `/opt/retropie/configs/ports/wild7/emulators.cfg` | `wild7 = ".../retroarch -L <core> --config <port cfg> %ROM%"` |
 | `/opt/retropie/emulators/retroarch/share/libretro/info/wild7_libretro.info` | core info |
 | `/opt/retropie/emulators/retroarch/bin/retroarch` | RetroArch |
