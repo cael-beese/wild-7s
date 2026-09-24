@@ -57,31 +57,61 @@ Contents
   starts each feature.
 - **Right rail**: CREDITS, BET and WIN readouts; the CONTROLS crib; and
   **LAST WIN**, which spells out the win being shown (see section 6).
-- **Button deck**: PAYS, BET LESS, BET MORE, BET MAX, ADD CREDITS, and the
-  big SPIN dome. They light as you press the matching controller button.
+- **Button deck**: PAYS, BET LESS, BET MORE, ADD CREDITS, BET MAX, and the
+  big SPIN button - in the order they sit on the panel (below). Each one
+  carries a small drawing of the panel with its own position lit, and
+  lights as you press it.
 
 ## 2. Controls
 
+Everything is on **player 1's side** of the cabinet's panel (a stick, two
+rows of three buttons, SELECT and START). The game lays its buttons out
+by position, the way a slot machine's deck reads:
+
+```
+            PLAYER 1 SIDE
+    (o)    [ PAYS ]        [ BET LESS ]   [ BET MORE ]
+   stick   [ ADD CREDITS ] [ BET MAX ]    [ SPIN ]
+           SELECT = PAYS                  START = SPIN
+```
+
 | Button | In the base game | Elsewhere |
 |---|---|---|
-| START or A | Spin. During a spin: slam the reels down | Pick a panel (pick bonus); spin the wheel; collect (gamble) |
-| B | Slam the reels down | Cancel (ADD CREDITS); collect (gamble) |
-| LEFT / RIGHT (or DOWN / UP) | Bet less / bet more | Move (pick bonus); RED / BLACK (gamble) |
-| X | BET MAX: the highest bet your credits cover, and spin | On a win that has finished counting: **GAMBLE** it. In the gamble: play the chosen suit |
-| Y | ADD CREDITS | |
-| SELECT | Pay table; SELECT again for FEATURES, again for MORE FEATURES | |
+| SPIN (or START) | Spin. During a spin: slam the reels down | Pick a panel (pick bonus); spin the wheel; collect (gamble); add (ADD CREDITS) |
+| BET LESS / BET MORE, or the stick left / right | Bet less / bet more | The stick moves (pick bonus) and calls RED / BLACK (gamble) |
+| BET MAX | The highest bet your credits cover, and spin | On a win that has finished counting: **GAMBLE** it. In the gamble: play the chosen suit |
+| ADD CREDITS | ADD CREDITS | Cancel (ADD CREDITS) |
+| PAYS (or SELECT) | The pay table; again for the next page (FEATURES, MORE FEATURES, CONTROLS) | Cancel (ADD CREDITS) |
 | Any button | Leaves the attract loop | During a big-win count: jump to the total, then again to collect |
 
-If your bet is more than your credits, START trims the bet to the
+**You never have to remember this.** The right rail's CONTROLS panel
+draws the six buttons in place and lights the one you press; every deck
+button shows where it is; and the pay table's fourth page, **CONTROLS**,
+draws the whole side of the panel with what each button does - press
+any button there and it lights up. SPIN or START leaves it. The very
+first player to press a button is shown this page first.
+
+**Setting up the cabinet: LEARN PANEL.** Which button of the encoder
+RetroArch sees in which position depends on how the panel was wired, so
+the game learns it. On its first start it asks: "PLAYER 1 SIDE: PRESS
+THE TOP LEFT BUTTON", then each of the eight positions in turn, and saves
+the answer. Nobody at the panel? After 12 seconds on the first question it
+gives up and does not ask again. To run it later, open the CONTROLS page
+and hold any button for 5 seconds. A position nobody presses for 12
+seconds is left without a button; holding one button for 3 seconds
+cancels. Until it has been learned the game assumes RetroPie's usual
+6-button layout.
+
+If your bet is more than your credits, SPIN trims the bet to the
 highest one you can afford instead of refusing. At zero credits the OUT
-OF CREDITS screen comes up; START, A or Y there opens ADD CREDITS.
+OF CREDITS screen comes up; SPIN or ADD CREDITS there opens ADD CREDITS.
 
 ## 3. Credits and the bet
 
 - You start with **5,000 credits** (set in `wild7.w7`).
-- **ADD CREDITS** (Y) offers 100, 250, 500, 1,000, 2,500 or 5,000; pick
-  with LEFT / RIGHT, A to add, B to cancel. They are play credits - this
-  is a home cabinet.
+- **ADD CREDITS** offers 100, 250, 500, 1,000, 2,500 or 5,000; choose
+  with the stick, SPIN to add, ADD CREDITS or PAYS to cancel. They are
+  play credits - this is a home cabinet.
 - **One total bet per spin**, on a 1-2-5 ladder:
   `10 20 50 100 200 500 1,000 2,000 5,000 10,000 20,000 50,000 100,000`.
   Every pay in the game is a multiple of the total bet, so the game plays

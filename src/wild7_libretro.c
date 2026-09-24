@@ -3321,11 +3321,12 @@ static void update(void){
       break;
     }
     if(G.idle>25.0f){ G.state=ST_ATTRACT; G.t=3.0f; break; }
-    if(hit(B_RIGHT)||hit(B_UP)){
+    /* BET MORE / BET LESS on the panel (w7_panel.c), or the stick */
+    if(hit(B_RIGHT)||hit(B_UP)||hit(B_R)){
       if(G.betIdx<BETMAXIDX){ G.betIdx++; sfx_bet_up(G.betIdx); } else sfx_bet_limit();
       flash_btn(2);
     }
-    if(hit(B_LEFT)||hit(B_DOWN)){
+    if(hit(B_LEFT)||hit(B_DOWN)||hit(B_L)){
       if(G.betIdx>0){ G.betIdx--; sfx_bet_down(G.betIdx); } else sfx_bet_limit();
       flash_btn(1);
     }
