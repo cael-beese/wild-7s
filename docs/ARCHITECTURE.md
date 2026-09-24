@@ -954,7 +954,7 @@ The full text is in `DEVELOPING.md`. In short:
 
 ## 9a. The lounge look - w7_lounge.c
 
-WILD 7's shares its look with Tim's other cabinet game, Beese's Poker
+WILD 7's shares its look with its sister game by the same author, Beese's Poker
 Lounge: the "neon honey lounge" - a dark plum honeycomb room, dark glass
 panels with a neon tube edge and its glow, neon-sign lettering, Bungee
 display type in cream-to-amber gold, Barlow Condensed labels, chasing
