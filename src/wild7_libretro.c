@@ -721,7 +721,17 @@ static inline const uint8_t* glyph_of(int ch){
   if(ch<32||ch>127) ch='?';
   return FONT[ch-32];
 }
+/*  text(): caps 7*px tall with their tops at y, aligned left (0), centred
+ *  (1) or right (2), fitted to the screen.  Set in Barlow Condensed, the
+ *  lounge's UI face (w7_lounge.c); the 5x7 block font above is only a
+ *  fallback before the fonts are baked.                                */
+static int  lzReady;
+static void lz_compat_text(const char*s,int x,int y,int px,uint32_t col,int align,int shadow,int fit);
+static float lz_caption_width(const char*s,float capH);
+static void lz_caption_mask(const char*s,float capH,uint8_t*m,int w,int h,float left,float top);
+static void lz_dilate(const uint8_t*src,uint8_t*dst,int w,int h,float r);
 static void text(const char*s,int x,int y,int px,uint32_t col,int align,int shadow){
+  if(lzReady){ lz_compat_text(s,x,y,px,col,align,shadow,1); return; }
   int n=(int)strlen(s);
   while(px>1 && n*px*6-px > FBW-10) px--;      /* auto-fit */
   if(!rows_visible(y, y+px*7+(shadow?px:0))) return;
@@ -937,6 +947,11 @@ static tbcache_t* tb_render(const char*str,int px,int n,int adv,int wtot,int cap
   memset(c->fill,0,(size_t)bw*bh);
   memset(c->out ,0,(size_t)bw*bh);
 
+  if(lzReady){
+    /* The lounge's display face (Bungee), grown by the rim for the outline. */
+    lz_caption_mask(str,(float)capH,c->fill,bw,bh,(float)pad,(float)pad);
+    lz_dilate(c->fill,c->out,bw,bh,Rout-Rin);
+  } else
   for(int i=0;i<n;i++){
     const uint8_t*gl=glyph_of((unsigned char)str[i]);
     #define SET(rr,cc) ((rr)>=0&&(rr)<7&&(cc)>=0&&(cc)<5 && (gl[rr]&(0x10>>(cc))))
@@ -982,12 +997,13 @@ static void textb(const char*str,int x,int y,int px,
      only the screen used to let a long caption overrun the buffer, which
      silently clipped its last letters rather than shrinking the type. */
   for(;;){
-    int wt=n*px*6-px, pad2=2*(int)(px*0.90f+4.0f);
+    int wt=lzReady ? (int)ceilf(lz_caption_width(str,px*7.0f)) : n*px*6-px, pad2=2*(int)(px*0.90f+4.0f);
     if(px<=2) break;
     if(wt<=FBW-40 && wt+pad2<=TBW && px*7+pad2<=TBH) break;
     px--;
   }
   int adv=px*6, wtot=n*adv-px, capH=px*7;
+  if(lzReady) wtot=(int)ceilf(lz_caption_width(str,(float)capH));
   int ox = align==1 ? x-wtot/2 : (align==2 ? x-wtot : x);
   int pad,bw,bh;
   tb_geom(px,wtot,capH,&pad,&bw,&bh);
@@ -1027,6 +1043,10 @@ static void textb(const char*str,int x,int y,int px,
   c->pins--;
   if(bp_active) bp_unlock();
 }
+
+/* The lounge look (fonts, neon, glass, the room, the panel icon), shared
+   with Beese's Poker Lounge: here, after the primitives it draws through. */
+#include "w7_lounge.c"
 
 /* ═══ SYMBOL ART ═══════════════════════════════════════════════════
  *  All coordinates are in 0..92 design units; U() lifts them onto the
@@ -2589,6 +2609,7 @@ enum { ST_ATTRACT, ST_IDLE, ST_SPIN, ST_EVAL, ST_SHOWWIN,
        ST_WHEEL,       /* wheel bonus              - w7_wheel.c */
        ST_GAMBLE,      /* double-or-nothing        - w7_extra.c */
        ST_STORM,       /* 7 STRIKE wild storm plays out - w7_extra.c */
+       ST_LEARN,       /* LEARN PANEL: which button is where - w7_panel.c */
        ST_NSTATES };
 
 #define MAXWINS 12
@@ -3017,17 +3038,13 @@ static void begin_bonus(void){
 /* ═══ INPUT ═══════════════════════════════════════════════════════ */
 enum { B_UP=1,B_DOWN=2,B_LEFT=4,B_RIGHT=8,B_A=16,B_B=32,B_X=64,B_Y=128,
        B_START=256,B_SELECT=512,B_L=1024,B_R=2048 };
+
+/* Where each button is on the cabinet's panel, and learning it. */
+#include "w7_panel.c"
+
 static void poll_input(void){
   input_poll_cb();
-  int b=0;
-  #define RB(id,bit) if(input_state_cb(0,RETRO_DEVICE_JOYPAD,0,id)) b|=bit
-  RB(RETRO_DEVICE_ID_JOYPAD_UP,B_UP);      RB(RETRO_DEVICE_ID_JOYPAD_DOWN,B_DOWN);
-  RB(RETRO_DEVICE_ID_JOYPAD_LEFT,B_LEFT);  RB(RETRO_DEVICE_ID_JOYPAD_RIGHT,B_RIGHT);
-  RB(RETRO_DEVICE_ID_JOYPAD_A,B_A);        RB(RETRO_DEVICE_ID_JOYPAD_B,B_B);
-  RB(RETRO_DEVICE_ID_JOYPAD_X,B_X);        RB(RETRO_DEVICE_ID_JOYPAD_Y,B_Y);
-  RB(RETRO_DEVICE_ID_JOYPAD_START,B_START);RB(RETRO_DEVICE_ID_JOYPAD_SELECT,B_SELECT);
-  RB(RETRO_DEVICE_ID_JOYPAD_L,B_L);        RB(RETRO_DEVICE_ID_JOYPAD_R,B_R);
-  #undef RB
+  int b=wp_read();              /* by panel position (w7_panel.c) */
   if(dbg_pilot){
     dbg_frame++;
     b=0;
@@ -3280,7 +3297,11 @@ static void update(void){
 
   switch(G.state){
   case ST_ATTRACT:
-    if(anyhit()){ G.state=ST_IDLE; G.t=0; G.idle=0; break; }
+    if(anyhit()){
+      /* the first player ever sees where the buttons are first */
+      if(!wpShown && !wpRaw){ G.state=ST_PAYTABLE; G.ptPage=3; G.t=0; G.idle=0; break; }
+      G.state=ST_IDLE; G.t=0; G.idle=0; break;
+    }
     if(G.t>3.0f){                       /* keep the reels turning       */
       for(int r=0;r<NREEL;r++){ G.rstate[r]=1; G.rdelay[r]=0.4f+r*0.25f; G.rt1[r]=0; }
       G.t=0;
@@ -3482,10 +3503,26 @@ static void update(void){
     break;
 
   case ST_PAYTABLE:
+    if(G.ptPage==3){
+      /* The CONTROLS page (w7_panel.c): every button lights where it is, so
+         only SPIN / START leave; one button held 5 s learns the panel. */
+      if(!wpShown){ wpShown=1; wp_save(); }
+      int held = wpNow & ~0xF0u;          /* not the stick */
+      wpHoldT = (held && held==(int)(wpPrev & ~0xF0u)) ? wpHoldT+DT : 0.0f;
+      if(wpHoldT>=5.0f && !wpRaw){ wpHoldT=0; wp_learn_begin(0,ST_PAYTABLE,3); break; }
+      if(G.t>0.3f && (hit(B_START)||hit(B_A))){ G.state=ST_IDLE; G.t=0; break; }
+      if(wpNow & ~wpPrev) G.t=0.31f;        /* a press keeps the page up */
+      if(G.t>90.0f){ G.state=ST_ATTRACT; G.t=3.0f; }
+      break;
+    }
     if(G.t>0.3f){
-      if(hit(B_SELECT)){ G.ptPage=(G.ptPage+1)%3; G.t=0; sfx_ui_page(); }
+      if(hit(B_SELECT)){ G.ptPage=(G.ptPage+1)%4; G.t=0; sfx_ui_page(); }
       else if(anyhit()){ G.state=ST_IDLE; G.t=0; }
     }
+    break;
+
+  case ST_LEARN:
+    wp_learn_update();
     break;
 
   case ST_BROKE:
@@ -3580,6 +3617,7 @@ static int seg_width(int ndig,float w,float h,int commas){
  *  Returns the total width drawn, so callers can place a label.        */
 static int seg_num(long long v,int rx,int y,int ndig,float w,float h,
                    uint32_t on,uint32_t ghost,int commas){
+  if(lzReady){ (void)ndig; (void)w; (void)ghost; return lz_readout(v,rx,y,h,on,commas); }  /* Bungee */
   float th = h*0.16f; if(th<3) th=3;
   float adv = w + h*0.14f;                 /* digit pitch               */
   float cadv= commas? w*0.42f : 0.0f;      /* extra pitch for a comma   */
@@ -3686,6 +3724,7 @@ static void fb_glass(int x,int y,int w,int h,float r,uint32_t top,uint32_t bot,i
  *  into the panel, darker at the top where the lip shades it, with a
  *  thin bright bevel on the lower edge where the light catches.      */
 static void led_window(int x,int y,int w,int h){
+  if(lzReady){ lz_well(x,y,w,h,8.0f); return; }    /* a dark glass well */
   fb_rrect(x,y,w,h,7,0x000000,255);
   fb_rrectg(x+2,y+2,w-4,h-4,6,0x05060A,0x0C0E16,255);
   for(int j=0;j<6;j++){                                   /* inner shade */
@@ -3785,6 +3824,12 @@ static spr_t btnspr[5][2];     /* deck buttons: at rest, and lit       */
  *  inside, a hard window reflection, a thick chrome bezel.  Two states,
  *  both baked; the glow round it is a separate additive sprite.      */
 static void build_dome(int which){
+  if(lzReady){
+    /* the lounge's SPIN: a gold neon tube on dark glass (w7_lounge.c) */
+    lz_bake_dome(&domespr[which],SPINR,LZ_GOLD,which);
+    if(!which) make_glow(&domehalo,SPINR+30,0xFFC040,2.2f,0.0f);
+    return;
+  }
   int r=SPINR, w=r*2+16, h=r*2+16, cx=w/2, cy=h/2;
   spr_t*sp=&domespr[which];
   sp->w=w; sp->h=h;
@@ -3844,6 +3889,12 @@ static void spin_dome(int cx,int cy,int r,int pressed,float pulse){
                0xDFFFC0,(int)(170*pulse));
     }
   }
+  if(lzReady){
+    lz_style st; memset(&st,0,sizeof st);
+    st.color=0xFFFAF0; st.align=LZ_CENTER; st.shadow=0x000000; st.shadow_k=0.9f;
+    lz_text_ex(LZF_DISP_S,"SPIN",(float)cx,(float)cy-12+(pressed?2:0),22.0f,&st);
+    return;
+  }
   text("SPIN",cx,cy-12,3,0x05240A,1,0);
   text("SPIN",cx,cy-13,3,0xFFFFFF,1,0);
   text("PRESS",cx,cy+12,1,0xDDFFC8,1,1);
@@ -3895,12 +3946,18 @@ static void bake_title(spr_t*o,const char*s,int px,const tstyle_t*ts){
   float P=(float)(px*K);
   int pad=ts->glowR*K*2+(int)(P*1.3f)+6;
   int W=(int)((n*6-1)*P)+pad*2, H=(int)(7*P)+pad*2;
+  if(lzReady) W=(int)ceilf(lz_caption_width(s,7*P))+pad*2;      /* Bungee */
   size_t N=(size_t)W*H;
   uint8_t*fill=(uint8_t*)calloc(N,1), *outl=(uint8_t*)calloc(N,1);
   float*hf=(float*)malloc(N*4), *tmp=(float*)malloc(N*4), *gl=(float*)malloc(N*4), *acc=(float*)calloc(N*4,4);
   memset(o,0,sizeof *o);
   if(!fill||!outl||!hf||!tmp||!gl||!acc){ free(fill); free(outl); free(hf); free(tmp); free(gl); free(acc); return; }
   float Rin=P*0.62f, Rout=Rin+P*0.30f+K*1.2f;
+  if(lzReady){
+    /* the lounge's display face, grown by the rim for the keyline */
+    lz_caption_mask(s,7*P,fill,W,H,(float)pad,(float)pad);
+    lz_dilate(fill,outl,W,H,Rout-Rin);
+  } else
   for(int i=0;i<n;i++){
     int ch=(unsigned char)s[i];
     if(ch>='a'&&ch<='z') ch-=32;
@@ -4168,8 +4225,26 @@ static uint32_t drum_shade(int y){
 
 /*  Rail panel: drawn live when a panel lights up, so it is cheap: a
  *  translucent gradient over the baked glass, a rim and a header.    */
+/* A rail panel's caption, the lounge way: small spaced capitals in its
+   neon, centred along the top. */
+static void rail_label(int x,int y,int w,const char*label,uint32_t col){
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=col; st.align=LZ_CENTER; st.spacing=2.0f;
+  st.shadow=0x000000; st.shadow_k=0.8f;
+  lz_text_ex(LZF_UI_S,label,x+w*0.5f,(float)y+2,15.0f,&st);
+}
+
 static void rail_panel(int x,int y,int w,int h,uint32_t hi,uint32_t lo,uint32_t rim,
                        const char*label,uint32_t lc){
+  if(lzReady){
+    /* lit glass: the panel's colour glowing through, a hot rim and its halo */
+    fb_rrectg(x+3,y+3,w-6,h-6,10,mixc(0x1E1624,hi,0.45f),mixc(0x0C080F,lo,0.45f),232);
+    fb_rframe(x-3,y-3,w+6,h+6,15,2.0f,rim,60);
+    fb_rframe(x-1,y-1,w+2,h+2,13,2.0f,rim,120);
+    fb_rframe(x,y,w,h,12,2.5f,lz_hot(rim,0.35f),255);
+    if(label) rail_label(x,y,w,label,lz_hot(lc,0.2f));
+    return;
+  }
   fb_rrectg(x+3,y+3,w-6,h-6,10,hi,lo,215);
   fb_rframe(x,y,w,h,12,2.0f,rim,255);
   fb_rframe(x+3,y+3,w-6,h-6,10,1.0f,mixc(rim,0xFFFFFF,0.5f),90);
@@ -4177,8 +4252,15 @@ static void rail_panel(int x,int y,int w,int h,uint32_t hi,uint32_t lo,uint32_t 
 }
 
 /* the cabinet version: smoked glass in a moulding, with a lit header */
+/* The lounge's rail: dark glass, a neon edge and its glow, and the caption. */
+static void lz_rail(int x,int y,int w,int h,uint32_t neon,const char*label){
+  lz_glass(x,y,w,h,neon,0.55f,1.0f);
+  if(label) rail_label(x,y,w,label,lz_hot(neon,0.35f));
+}
+
 static void glass_rail(int x,int y,int w,int h,uint32_t top,uint32_t bot,int kind,
                        const char*label,uint32_t lc){
+  if(lzReady){ (void)top; (void)bot; lz_rail(x,y,w,h,kind?LZ_HONEY:mixc(lc,LZ_MAGENTA,0.3f),label); return; }
   fb_softshadow(x,y,w,h,12,8,120);
   fb_glass(x+2,y+2,w-4,h-4,11,top,bot,200);
   fb_moulding(x-1,y-1,w+2,h+2,13,4.0f,kind,255);
@@ -4191,16 +4273,34 @@ static void glass_rail(int x,int y,int w,int h,uint32_t top,uint32_t bot,int kin
 
 /* button deck geometry, shared by the static art and the live redraw */
 #define NBTN 5
-static const int BTNX[NBTN] = {  24, 236, 448, 660, 872 };
+/* In the order the panel reads (w7_panel.c): its top row PAYS, BET LESS,
+   BET MORE, then the bottom row ADD CREDITS, BET MAX, and SPIN (the dome).
+   The index stays the button (flash_btn: 0 pays 1 less 2 more 3 max 4 add). */
+static const int BTNX[NBTN] = {  24, 236, 448, 872, 660 };
 static const int BTNW[NBTN] = { 196, 196, 196, 196, 196 };
 static const char*BTNL1[NBTN]= {"PAYS","BET","BET","BET","ADD"};
 static const char*BTNL2[NBTN]= {NULL, "LESS","MORE","MAX","CREDITS"};
-static const uint32_t BTNC[NBTN]={0x2A78F0,0xF0A020,0xF0A020,0xE8283A,0x22B84A};
+static const uint32_t BTNC[NBTN]={0x28E6FF,0xFF9A20,0xFF9A20,0xFF28C8,0x78FF8C};   /* lounge neon */
+static const int BTNF[NBTN]={B_SELECT,B_L,B_R,B_X,B_Y};                          /* what it is */
+#define BTNM 13           /* the lit sprite's margin: the neon glow spills that far */
 
 /*  An illuminated arcade button: coloured translucent plastic with a
  *  lamp behind it, a hard reflection across the top and a chrome
  *  bezel.  `lit` is the pressed flash, brighter and seated deeper.  */
-static void paint_button(int x,int y,int w,int h,const char*l1,const char*l2,uint32_t col,int lit){
+static void paint_button(int x,int y,int w,int h,const char*l1,const char*l2,uint32_t col,int lit,int key){
+  if(lzReady){
+    /* the lounge's neon button, with where it is on the panel at its left */
+    lz_button(x,y,w,h,col,lit);
+    int dy=lit?2:0;
+    const float ih=20.0f, iw=lz_icon_w(ih);
+    lz_icon((float)x+12,y+h*0.5f-ih*0.5f+dy,ih,wp_mask(key),lz_hot(col,0.2f),255);
+    lz_style st; memset(&st,0,sizeof st);
+    st.color=0xFFFAF0; st.align=LZ_CENTER; st.shadow=0x000000; st.shadow_k=0.85f;
+    float cx=x+12+iw+(w-24-iw)*0.5f+6;
+    if(l2){ lz_text_ex(LZF_DISP_S,l1,cx,(float)y+dy+7,19.0f,&st); lz_text_ex(LZF_DISP_S,l2,cx,(float)y+dy+27,19.0f,&st); }
+    else lz_text_ex(LZF_DISP_S,l1,cx,(float)y+dy+15,24.0f,&st);
+    return;
+  }
   float r=14.0f, cx=x+w*0.5f, cy=y+h*0.5f;
   fb_rrect(x-2,y+2,w+4,h+6,r+2,0x000000,170);
   int dy=lit?2:0;
@@ -4247,6 +4347,16 @@ static void paint_button(int x,int y,int w,int h,const char*l1,const char*l2,uin
  *  faint art-deco fan behind the reels.  The rails are smoked glass, so
  *  the stage glows through them.                                     */
 static void paint_backdrop(int theme){
+  if(lzReady){
+    /* the lounge's honeycomb room; free spins light it in night blue */
+    lz_paint_room(fb,theme);
+    if(theme) for(int i=0;i<200;i++){
+      int x=(int)(hash2(i,9,1u)*FBW), y=(int)(hash2(i,10,1u)*FBH);
+      int v=(int)(50+hash2(i,11,1u)*170);
+      fb_add(x,y,v*8/10,v*9/10,v);
+    }
+    return;
+  }
   uint32_t top = theme?0x061430:0x1C0C3A, mid=theme?0x040A1E:0x0E0724, bot=theme?0x02040C:0x040210;
   for(int y=0;y<FBH;y++){
     float t=(float)y/(FBH-1);
@@ -4316,6 +4426,16 @@ static void paint_backdrop(int theme){
  *  sunburst behind the sign and bulb sockets round the edge.  The sign,
  *  ticker, searchlights and lit bulbs are live: see draw_marquee().  */
 static void paint_marquee_box(int theme){
+  if(lzReady){
+    /* the sign's box: dark plum glass the full width, a magenta tube
+       along its top and a honey one along its foot */
+    lz_glass(6,4,FBW-12,MQH-8,theme?LZ_CYAN:LZ_MAGENTA,0.45f,1.0f);
+    for(int x=14;x<FBW-14;x++){
+      fb_blend(x,MQH-6,lz_hot(LZ_HONEY,0.4f),200);
+      fb_add(x,MQH-5,60,40,10); fb_add(x,MQH-7,60,40,10);
+    }
+    return;
+  }
   fb_softshadow(4,2,FBW-8,MQH-4,15,6,140);
   fb_rrectg(8,5,FBW-16,MQH-10,12,theme?0x0A2A5A:0x7A0A1E,theme?0x020816:0x1E0208,255);
   { float ox=FBW*0.5f, oy=MQH*0.5f;
@@ -4344,6 +4464,11 @@ static void paint_marquee_box(int theme){
 }
 
 static void paint_reel_window(void){
+  if(lzReady){
+    /* brushed brass with honey light round it, a dark lip, a magenta tube */
+    fb_softshadow(GX-22,GY-22,GW+44,GH+44,26,10,200);
+    lz_reel_frame(GX,GY,GW,GH);
+  } else {
   /* a heavy frame: shadow, chrome, a gold inner bezel, a dark lip */
   fb_softshadow(GX-22,GY-22,GW+44,GH+44,26,10,200);
   fb_rrect(GX-22,GY-22,GW+44,GH+44,26,0x05060A,255);
@@ -4360,6 +4485,7 @@ static void paint_reel_window(void){
       uint32_t c=env_map(env_up(nx,ny,nz),1);
       fb_blend(SX[k]+i,SY[k]+j,c,(int)(255*clampf((1.0f-d)*6.0f,0,1)));
     }
+  }
   /* the drums themselves - bright, which is the whole point */
   for(int y=GY;y<GY+GH;y++){
     uint32_t c=drum_shade(y);
@@ -4409,7 +4535,60 @@ static void neon_frame(int x,int y,int w,int h,float r,uint32_t col,int rainbow)
   fb_rframe(x,y,w,h,r,2.0f,rainbow?0xFFFFFF:mixc(col,0xFFFFFF,0.5f),255);
 }
 
+/*  The CONTROLS crib in the right rail: player 1's buttons as two rows of
+ *  three, each named, in the positions the game uses (w7_panel.c).  The
+ *  static part; draw_meters() lights the ones held.                   */
+#define CRIBX(p) (RRX+50+((p)%3)*90)
+#define CRIBY(p) (CTLY+48+((p)/3)*62)
+static void paint_crib(void){
+  lz_rail(RRX,CTLY,RAILW,CTLH,LZ_CYAN,"CONTROLS - PLAYER 1 SIDE");
+  for(int p=0;p<6;p++){
+    uint32_t neon = (PNL_DOES[p]&B_A) ? LZ_GOLD : LZ_HONEY;
+    lz_dot((float)CRIBX(p),(float)CRIBY(p),14.0f,neon,255);
+    lz_dot((float)CRIBX(p),(float)CRIBY(p),11.0f,0x1E1622,255);
+    lz_text_sh(LZF_UI_S,PNL_LABEL[p],(float)CRIBX(p),(float)CRIBY(p)+16,15.0f,0xF0E6F4,LZ_CENTER);
+  }
+  lz_text_sh(LZF_UI_S,"SELECT = PAYS   START = SPIN   STICK = BET",RRX+RAILW*0.5f,(float)CTLY+CTLH-22,14.0f,0xA89CB4,LZ_CENTER);
+}
+
 static void paint_rails(void){
+  if(lzReady){
+    /* ── left rail: the progressive sign ─────────────────────────── */
+    lz_rail(LRX,JPY,RAILW,JPH,LZ_MAGENTA,"PROGRESSIVE JACKPOTS");
+    static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
+    static const char*JH[NJP]={"5 ULTIMATES - 100,000X","7+ JACKPOTS - 200X",
+                               "6 JACKPOTS - 40X","5 JACKPOTS - 5X"};
+    for(int i=0;i<NJP;i++){
+      int y = i==0 ? JPY+24 : JPY+88+(i-1)*54;
+      int h = i==0 ? 46 : 34;
+      led_window(LRX+8,y,RAILW-16,h);
+      neon_frame(LRX+8,y,RAILW-16,h,7,TIERC[i],i==0);
+      int ly = y+h+3;
+      lz_text_sh(LZF_DISP_S,JN[i],(float)LRX+12,(float)ly-1,15.0f,lz_hot(TIERC[i],0.25f),LZ_LEFT);
+      lz_text_sh(LZF_UI_S,JH[i],(float)LRX+RAILW-12,(float)ly+1,14.0f,0xB4AAC4,LZ_RIGHT);
+    }
+    /* ── left rail: the feature meters, at rest ─────────────────── */
+    lz_rail(LRX,FEATY,134,FEATH,LZ_GREEN,"FREE SPINS");
+    lz_rail(LRX+RAILW-134,FEATY,134,FEATH,LZ_AMBER,"MULTIPLIER");
+    /* ── left rail: how to win ───────────────────────────────────── */
+    { int h=GY+GH-HOWY;
+      lz_rail(LRX,HOWY,RAILW,h,LZ_HONEY,"HOW TO WIN");
+      static const char*HW[6]={"WAYS PAY LEFT TO RIGHT","WILD 7 = X2 PER WILD","3 STARS = FREE SPINS",
+                               "3 CROWNS = PICK BONUS","6 COINS = HOLD & SPIN","3 WHEELS = THE WHEEL"};
+      static const uint32_t HC[6]={0xFFF4E6,0xFFC24A,0x9CF57A,0xE0A0FF,0xFFD86A,0xE070FF};
+      for(int i=0;i<6;i++) lz_text_sh(LZF_UI_M,HW[i],LRX+RAILW*0.5f,(float)HOWY+26+i*27,22.0f,HC[i],LZ_CENTER); }
+    /* ── right rail: credits, bet, win ───────────────────────────── */
+    static const char*MN[3]={"CREDITS","BET","WIN"};
+    static const uint32_t MC[3]={LZ_CYAN,LZ_AMBER,LZ_MAGENTA};
+    for(int i=0;i<3;i++){
+      int y=METY+i*METH;
+      lz_rail(RRX,y,RAILW,METH-6,MC[i],MN[i]);
+      led_window(RRX+10,y+22,RAILW-20,40);
+    }
+    paint_crib();
+    lz_rail(RRX,LWY,RAILW,GY+GH-LWY,LZ_HONEY,"LAST WIN");
+    return;
+  }
   /* ── left rail: the progressive sign ───────────────────────────── */
   glass_rail(LRX,JPY,RAILW,JPH,0x2A1850,0x080418,1,"PROGRESSIVE JACKPOTS",0xFFE9A8);
   static const char*JN[NJP]={"ULTIMATE","MEGA","MAJOR","MINOR"};
@@ -4470,6 +4649,14 @@ static void paint_rails(void){
 }
 
 static void paint_deck(void){
+  if(lzReady){
+    /* a long glass shelf with a honey tube along it, and the SPIN
+       button's place: where it is on the panel, left of it */
+    lz_glass(8,DECKY+3,FBW-16,FBH-DECKY-9,LZ_HONEY,0.4f,1.0f);
+    const float ih=20.0f;
+    lz_icon(SPINX-SPINR-lz_icon_w(ih)-14,SPINY-ih*0.5f,ih,wp_mask(B_A|B_START),LZ_GOLD,255);
+    return;
+  }
   fb_softshadow(4,DECKY,FBW-8,FBH-DECKY-4,15,6,160);
   fb_glass(6,DECKY+2,FBW-12,FBH-DECKY-8,13,0x1E2448,0x04060E,235);
   fb_moulding(4,DECKY,FBW-8,FBH-DECKY-4,15,4.0f,1,255);
@@ -4498,13 +4685,13 @@ static void build_bg_theme(int theme){
   for(int i=0;i<NBTN;i++){
     if(theme==0){
       uint32_t save[260*80];
-      int bx=BTNX[i]-4, by=BTNY-4, bw=BTNW[i]+8, bh=BTNH+12;
+      int bx=BTNX[i]-BTNM, by=BTNY-BTNM+2, bw=BTNW[i]+2*BTNM, bh=BTNH+2*BTNM;
       for(int j=0;j<bh;j++) for(int k=0;k<bw;k++) save[j*bw+k]=fb[(by+j)*FBW+bx+k];
-      paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],1);
+      paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],1,BTNF[i]);
       grab_sprite(&btnspr[i][1],bx,by,bw,bh);
       for(int j=0;j<bh;j++) for(int k=0;k<bw;k++) fb[(by+j)*FBW+bx+k]=save[j*bw+k];
     }
-    paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],0);
+    paint_button(BTNX[i],BTNY,BTNW[i],BTNH,BTNL1[i],BTNL2[i],BTNC[i],0,BTNF[i]);
   }
   bgTheme=0;
 }
@@ -5046,7 +5233,13 @@ static void draw_meters(void){
   /* ── deck ───────────────────────────────────────────────────────── */
   for(int i=0;i<NBTN;i++){               /* decays in render(), not here */
     if(btnFlash[i]<=0) continue;
-    blit(&btnspr[i][1],BTNX[i]-4,BTNY-4,0,FBH,255,0,0.0f);
+    blit(&btnspr[i][1],BTNX[i]-BTNM,BTNY-BTNM+2,0,FBH,255,0,0.0f);
+  }
+  /* the crib lights the button being held, where it is */
+  if(lzReady) for(int p=0;p<6;p++) if(wp_pos_down(p)){
+    uint32_t neon = (PNL_DOES[p]&B_A) ? LZ_GOLD : LZ_HONEY;
+    lz_add_tint(&lzGlow,CRIBX(p)-32,CRIBY(p)-32,neon,200);
+    lz_dot((float)CRIBX(p),(float)CRIBY(p),11.0f,neon,255);
   }
   float sp = (G.state==ST_IDLE||G.state==ST_ATTRACT)
              ? 0.5f+0.5f*sinf(G.t*3.2f) : 0.0f;
@@ -5256,6 +5449,7 @@ static void paint_features2(void){
 #define NPTPAGE 3
 static void draw_paytable(void){
   static void (*const paint[NPTPAGE])(void) = { paint_paytable, paint_features, paint_features2 };
+  if(G.ptPage==3){ wp_controls_draw(G.t); return; }   /* CONTROLS, drawn live (w7_panel.c) */
   int pg = G.ptPage%NPTPAGE;
   if(pg<0) pg=0;
   cache_backdrop(&ptimg[pg], paint[pg]);
@@ -6030,6 +6224,7 @@ static void draw_overlays(void){
   fx_bigwin_draw();
   if(G.state==ST_JACKPOT)  draw_jackpot();
   if(G.state==ST_PAYTABLE) draw_paytable();
+  if(G.state==ST_LEARN)    wp_learn_draw();
   if(G.state==ST_BONUS)    draw_bonus();
 }
 
@@ -6070,6 +6265,7 @@ static void art_update(void){
 
 /* fixed-size text with no auto-fit, glyphs off screen skipped: the ticker */
 static void text_run(const char*s,int x,int y,int px,uint32_t col,int shadow){
+  if(lzReady){ lz_compat_text(s,x,y,px,col,0,shadow,0); return; }
   int n=(int)strlen(s), adv=px*6;
   if(!rows_visible(y, y+px*7+(shadow?px:0))) return;
   for(int pass=(shadow?0:1); pass<2; pass++){
@@ -6110,6 +6306,11 @@ static void build_marquee(void){
     int fx=x-4+i, fy=y-4+j;
     save[j*(w+8)+i]=((unsigned)fx<FBW&&(unsigned)fy<FBH)?fb[fy*FBW+fx]:0;
   }
+  if(lzReady){
+    /* the lounge's sign plate: dark glass with a honey tube; the neon
+       lettering is drawn live over it (mq_sign), so it can flicker */
+    lz_glass(x,y,w,h,LZ_HONEY,0.0f,1.0f);
+  } else {
   fb_rrectg(x,y,w,h,14,0x4A0818,0x0C0104,255);
   for(int j=0;j<h;j++) for(int i=0;i<w;i++){          /* a lamp behind the lettering */
     float dx=(i-w*0.5f)/(w*0.5f), dy=(j-h*0.55f)/(h*0.8f), d=dx*dx+dy*dy;
@@ -6118,9 +6319,10 @@ static void build_marquee(void){
   }
   for(int j=0;j<h/2;j++) for(int i=6;i<w-6;i++) fb_blend(x+i,y+2+j,0xFFFFFF,(h/2-j)/2);
   fb_moulding(x,y,w,h,14,4.0f,1,255);
+  }
   const spr_t*L=&title[TT_LOGO];
   logoX=x+w/2-L->w/2; logoY=y+h/2-L->h/2+1;
-  blit(L,logoX,logoY,y+3,y+h-3,255,0,0.0f);
+  if(!lzReady) blit(L,logoX,logoY,y+3,y+h-3,255,0,0.0f);
   /* grab it with the plate's rounded outline as its alpha */
   mqPlate.w=w; mqPlate.h=h;
   mqPlate.px=(uint8_t*)malloc((size_t)w*h*4);
@@ -6198,6 +6400,32 @@ static void draw_marquee(void){
   text_run(tk,20-off+tw,MQH/2-7,2,0xFFF4D0,1);
   }
 
+  if(lzReady){
+    /* 3. the sign: the plate, the bee, "Beese's" in pink script and
+       WILD 7'S in honey neon, a letter now and then flickering */
+    blit(&mqPlate,MQPX,MQPY,0,FBH,255,0,0.0f);
+    float pw[16];
+    int fr=(int)(mqT*9.0f);
+    for(int i=0;i<16;i++){
+      float h=dhash(i*31+7,fr);
+      pw[i]= h<0.025f ? 0.2f : (h<0.05f ? 0.6f : 1.0f);
+      if(opt_limiter && pw[i]<1.0f) pw[i]=0.75f;
+    }
+    const float s1=38.0f, s2=34.0f;
+    float w1=lz_width(LZF_SCRIPT,"Beese's",s1,0), w2=lz_width(LZF_NEON_L,"WILD 7'S",s2,0);
+    float bw=(float)lzBeeSmall.w*0.62f, tot=bw+6+w1+14+w2;
+    float x0=MQPX+MQPW*0.5f-tot*0.5f, cy=MQPY+MQPH*0.5f;
+    blit_scaled(&lzBeeSmall,(int)(x0+bw*0.5f),(int)cy+1,0.62f,255);
+    lz_neon_ex(LZF_SCRIPT,"Beese's",x0+bw+6+w1*0.5f,cy+3,s1,LZ_MAGENTA,1.0f,0.9f,pw);
+    lz_neon_ex(LZF_NEON_L,"WILD 7'S",x0+bw+6+w1+14+w2*0.5f,cy,s2,LZ_HONEY,1.0f,0.9f,pw+8);
+    /* 4. bulbs chasing along the top and the foot, either side of the sign */
+    for(int row=0;row<2;row++){
+      int y=row?MQH-8:8;
+      lz_bulbs_row(24,MQPX-18,y,26,mqT,row*3);
+      lz_bulbs_row(MQPX+MQPW+18,FBW-24,y,26,mqT,row*3+11);
+    }
+    return;
+  }
   /* 3. the sign, its halo breathing, a shine crossing the logo */
   blit(&mqPlate,MQPX,MQPY,0,FBH,255,0,0.0f);
   float pulse=0.5f+0.5f*sinf(mqT*3.4f);
@@ -6349,6 +6577,7 @@ void retro_init(void){
     if((e=getenv("WILD7_PROFILE"))) dbg_profile=atoi(e);
   }
   if(!assets_ready){
+    lz_init();                  /* fonts and lounge sprites, used by the art */
     build_strips();
     build_sprites();
     build_dome(0);
@@ -6374,6 +6603,7 @@ void retro_deinit(void){
   free(glowspr.px); glowspr.px=NULL;
   free(washspr.px); washspr.px=NULL;
   art_free();                             /* everything the art baked */
+  lz_free();
   for(int i=0;i<2;i++){ free(domespr[i].px); domespr[i].px=NULL; }
   fx_deinit();
   assets_ready=0;
@@ -6460,6 +6690,7 @@ bool retro_load_game(const struct retro_game_info*info){
   struct retro_log_callback lg;
   if(environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE,&lg)) log_cb=lg.log;
   check_vars();
+  wp_init();                    /* where the panel buttons are (w7_panel.c) */
   /* the .w7 "ROM" is a plain-text cabinet settings blob; absent is fine */
   if(info && info->data && info->size){
     char buf[513]; size_t m = info->size<512?info->size:512;
@@ -6488,6 +6719,7 @@ bool retro_load_game(const struct retro_game_info*info){
       if(!strcmp(k,"credits")){ long long n=atoll(v); if(n>0 && n<=1000000000LL) G.credits=n; }
     }
   }
+  wp_first_start();             /* the first start offers LEARN PANEL */
   return true;
 }
 bool retro_load_game_special(unsigned t,const struct retro_game_info*i,size_t n){

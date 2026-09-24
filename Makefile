@@ -7,10 +7,12 @@
 TARGET := wild7_libretro.so
 SRC    := src/wild7_libretro.c
 HDR    := src/libretro.h
-MODS   := $(wildcard src/w7_*.c src/w7_*.h)
+MODS   := $(wildcard src/w7_*.c src/w7_*.h) $(wildcard assets/fonts/*.ttf)
 ARCH   := $(shell uname -m)
 
 CFLAGS  := -O3 -ffast-math -fno-math-errno -fPIC -Wall -Wextra -Isrc
+# The fonts are embedded with .incbin (src/w7_lounge.c) from an absolute path.
+CFLAGS  += -DW7_ASSETS=\"$(CURDIR)/assets\"
 LDFLAGS := -shared -lm -lpthread
 
 # Flags common to every target, captured before the host-specific
@@ -100,8 +102,8 @@ sim: w7sim
 shot: w7shot
 audio: w7audio
 w7sim: src/sim.c $(SRC) $(HDR) $(MODS)
-	$(CC) -O2 -Isrc -o $@ src/sim.c -lm -lpthread
+	$(CC) -O2 -Isrc -DW7_ASSETS=\"$(CURDIR)/assets\" -o $@ src/sim.c -lm -lpthread
 w7shot: tools/w7shot.c $(SRC) $(HDR) $(MODS)
-	$(CC) -O2 -Isrc -o $@ tools/w7shot.c -lm -lz -lpthread
+	$(CC) -O2 -Isrc -DW7_ASSETS=\"$(CURDIR)/assets\" -o $@ tools/w7shot.c -lm -lz -lpthread
 w7audio: tools/w7audio.c $(SRC) $(HDR) $(MODS)
-	$(CC) -O3 -ffast-math -fno-math-errno -Isrc -o $@ tools/w7audio.c -lm -lpthread
+	$(CC) -O3 -ffast-math -fno-math-errno -Isrc -DW7_ASSETS=\"$(CURDIR)/assets\" -o $@ tools/w7audio.c -lm -lpthread

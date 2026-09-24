@@ -183,6 +183,7 @@ int main(int argc,char**argv){
   retro_set_input_poll(inpoll);
   retro_set_input_state(inst);
   double t0=now_ms();
+  setenv("WILD7_RAWPAD","1",0);   /* scripts name RetroPad letters (src/w7_panel.c) */
   retro_init();
   { static char gbuf[4096]; struct retro_game_info gi; memset(&gi,0,sizeof gi);
     size_t gn=0; FILE*gf=gamepath?fopen(gamepath,"rb"):NULL;
