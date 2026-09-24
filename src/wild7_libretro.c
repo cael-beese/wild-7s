@@ -4152,7 +4152,6 @@ static const uint32_t SILVERG[4]= {0xFFFFFF,0xE0E8F8,0x9AA6C0,0x525C78};
 static const uint32_t GOLDG[5] = {0xFFFDF0,0xFFEBA8,0xF0B420,0xA8760C,0x5E4206};
 static const uint32_t GREENG[4] = {0xEEFFE6,0x9CF57A,0x2E9A2E,0x115011};
 static const uint32_t ICEG[4]   = {0xFFFFFF,0xCFEEFF,0x4FA8D8,0x14506E};
-static const uint32_t RAINBOWG[6]={0xFFFFFF,0xFFE0A0,0xFF8AC8,0xA0C0FF,0x80FFD0,0x2A5A80};
 
 /*  The cabinet has two looks: the base game, and the free-spins night
  *  set, which gets its own backdrop and gilded drums.  Both are baked
