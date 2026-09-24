@@ -989,6 +989,13 @@ static int tb_clip(int bx,int by,int bw,int bh,int*j0,int*j1,int*i0,int*i1){
   return *j0<*j1 && *i0<*i1;
 }
 
+/*  The width textb() gives a caption at px (Bungee is wider than the old
+ *  5x7 blocks, so layout that assumes n*6*px must ask this instead).  */
+static __attribute__((unused)) int textb_w(const char*s,int px){
+  if(lzReady) return (int)ceilf(lz_caption_width(s,px*7.0f));
+  int n=(int)strlen(s); return n*px*6-px;
+}
+
 static void textb(const char*str,int x,int y,int px,
                   const uint32_t*st,int ns,int align){
   int n=(int)strlen(str);
