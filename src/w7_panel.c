@@ -233,7 +233,7 @@ static void wp_draw_side(float x, float y, float s, int mark, uint32_t lit, int 
   for(int p = 0; p < PNL_N; p++){
     float cx, cy, r;
     if(p < 6){ cx = x + (170 + (p % 3) * 110) * s; cy = y + (60 + (p / 3) * 118) * s; r = 30 * s; }
-    else { cx = x + (225 + (p - 6) * 110) * s; cy = y + 258 * s; r = 13 * s; }
+    else { cx = x + (225 + (p - 6) * 110) * s; cy = y + 268 * s; r = 13 * s; }
     int on = (lit >> p) & 1u;
     uint32_t neon = (PNL_DOES[p] & (B_A | B_START)) ? LZ_GOLD : LZ_HONEY;
     if(p == mark){
@@ -245,8 +245,13 @@ static void wp_draw_side(float x, float y, float s, int mark, uint32_t lit, int 
     lz_dot(cx, cy, r + 3 * s, on ? lz_hot(neon, 0.4f) : neon, 255);
     lz_dot(cx, cy, r, on ? neon : 0x1E1622, 255);
     if(p >= 6){
-      lz_text_sh(LZF_UI_S, p == PNL_SELECT ? "SELECT" : "START", cx, cy - 34 * s, 14 * s, 0xAAA0B4, LZ_CENTER);
-      if(labels) lz_text_sh(LZF_UI_S, PNL_LABEL[p], cx, cy + 16 * s, 16 * s, LZ_HONEY, LZ_CENTER);
+      /* SELECT and START sit between the bottom row's labels, so their
+         names go beside them, not above: the button's name on the left,
+         what it does on the right, both centred on the button. */
+      const lz_font *F = &lzf[LZF_UI_S];
+      float sz = 15 * s, ty = cy - (F->capTop + F->capH * 0.5f) * (sz / F->base);
+      lz_text_sh(LZF_UI_S, p == PNL_SELECT ? "SELECT" : "START", cx - r - 7 * s, ty, sz, 0xAAA0B4, LZ_RIGHT);
+      if(labels) lz_text_sh(LZF_UI_S, PNL_LABEL[p], cx + r + 7 * s, ty, sz, on ? 0xFFFFFF : LZ_HONEY, LZ_LEFT);
       continue;
     }
     if(labels){
