@@ -29,6 +29,18 @@ In plain terms (the license text below is what governs):
 RetroArch team, and is licensed under its own MIT terms, which are stated
 at the top of that file. The PolyForm license does not apply to it.
 
+`src/third_party/stb_truetype.h` is Sean Barrett's font rasteriser, in the
+public domain or under the MIT license, at your choice (stated at the end
+of that file). The PolyForm license does not apply to it.
+
+The fonts in `assets/fonts/` (embedded in the built core) are Barlow
+Condensed, Bungee, Tilt Neon and Neonderthaw, each under the SIL Open Font
+License 1.1, whose text and copyright notices are beside them
+(`*-OFL.txt`). The PolyForm license does not apply to them.
+
+`src/w7_raster.*` and `src/w7_lart.*` come from Beese's Poker Lounge, by the
+same author, under the same PolyForm Noncommercial license.
+
 ---
 
 # PolyForm Noncommercial License 1.0.0
