@@ -10,10 +10,12 @@
  *  one after another, and every cell they hit becomes a WILD 7.  Then the
  *  spin is paid as normal - the wilds were in the grid all along.
  *
- *  GAMBLE - classic double or nothing on a counted base-game win.  A big
- *  face-down card on a felt table: LEFT bets RED, RIGHT bets BLACK (x2),
- *  UP/DOWN choose a suit and X plays it (x4), A/START collects.  Up to
- *  five in a row, with the last five cards dealt shown along the bottom.
+ *  GAMBLE - classic double or nothing on a counted base-game win, as the
+ *  lounge's double-up: a face-down card on a dark glass panel between a
+ *  RED and a BLACK neon sign.  STICK LEFT bets RED, STICK RIGHT bets
+ *  BLACK (x2), STICK UP/DOWN choose a suit and BET MAX plays it (x4),
+ *  SPIN collects.  Up to five in a row, with the last five cards dealt
+ *  shown along the bottom.
  *
  *  Render contract: every *_draw function here reads G and the baked
  *  art only.  Clocks, RNG and effects are all driven from update code;
@@ -94,43 +96,60 @@ static int ex_ready;
 static uint8_t *clA, *clS;             /* alpha, shade                   */
 static uint8_t clRowMax[CLH];          /* skip rows with nothing in them */
 static uint8_t clW[FBW];               /* thinner toward the screen edge */
-static spr_t stormWild;                /* WILD 7 on its blue backing, badge */
+static spr_t stormWild;                /* WILD 7 on its cyan backing, badge */
 static spr_t pillSpr, plateSpr;        /* the gamble offer, the 7 STRIKE plate */
 #define EGL 128
 static uint8_t exGlow[EGL*EGL];        /* radial falloff, for additive glows */
 
-#define CDW 190                        /* the big card                   */
-#define CDH 266
+#define CDW 172                        /* the big card                   */
+#define CDH 240
 #define MCW 46                         /* history cards                  */
 #define MCH 64
-static spr_t pipBig[4], pipMid[4], pipMini[4], pipSm[4], sevenSm;
+static spr_t pipBig[4], pipMini[4], pipSm[4];
 static spr_t cardFace[4], cardBack, cardMini[4];
-static uint32_t *tblImg;               /* the whole felt table, opaque   */
+/*  Neon suit signs, white so they can be tinted: the tube with its halo,
+ *  and the tube alone for the hot core, big (the RED / BLACK signs) and
+ *  small (the suit chips).                                             */
+static spr_t pipNeon[4], pipCore[4], pipNeonSm[4], pipCoreSm[4];
+/*  The card index in the lounge's UI face, red and black, upright and
+ *  turned half a turn for the lower corner.                            */
+#define RKW 40
+#define RKH 30
+static spr_t rankSpr[2][13][2];
+static uint32_t *tblImg;               /* the whole glass table, opaque  */
 
 /* table layout: it sits exactly over the reel window and its bezel */
 #define TX0 (GX-16)
 #define TY0 (GY-16)
 #define TW  (GW+32)
 #define TH  (GH+32)
-#define CARDY 176
-#define PLW 176
-#define PLH 170
-#define PLY 222
-#define REDX (FBW/2-95-24-PLW)
-#define BLKX (FBW/2+95+24)
-#define CHIPY 454
-#define CHIPW 66
-#define CHIPH 56
-#define CHIPX0 (FBW/2-2*CHIPW-12)
-#define LBLX 412                        /* centre of the left-hand labels  */
-#define LBRX 868                        /* and of the right-hand ones      */
-#define HISTY 532
-#define HISTX0 490
-#define COLX 762                        /* the COLLECT button               */
-#define COLW 188
+#define GLX (TX0+12)                    /* the glass panel inside it        */
+#define GLY (TY0+12)
+#define GLW (TW-24)
+#define GLH (TH-24)
+#define CAPY 74                         /* top of the caption row           */
+#define POTW 280                        /* the pot's well                   */
+#define POTH 48
+#define POTY 100
+#define CARDY 160
+#define SIGNL 435                       /* centres of the RED and BLACK signs */
+#define SIGNR 845
+#define SIGNY 224
+#define PIPY  292
+#define CHIPY 416
+#define CHIPW 60
+#define CHIPH 52
+#define CHIPG 10
+#define CHIPX0 (FBW/2-(4*CHIPW+3*CHIPG)/2)
+#define LBLX 420                        /* centre of the left-hand labels  */
+#define LBRX 860                        /* and of the right-hand ones      */
+#define HISTY 484
+#define HISTX0 (FBW/2-(EX_NHIST*MCW+(EX_NHIST-1)*8)/2)
+#define PROMPTY 574                     /* the controls line               */
 
-static const uint32_t ELECG[5] = {0xFFFFFF,0xE8F8FF,0x8FD8FF,0x2F7CF0,0x14307A};
+static const uint32_t TUBE_RED=0xFF3246, TUBE_BLK=0xA0BEFF;   /* the two signs' neon */
 static const char*RANKS[13] = {"A","2","3","4","5","6","7","8","9","10","J","Q","K"};
+static const char*SUITN[4] = {"HEARTS","DIAMONDS","CLUBS","SPADES"};
 
 /* box-filter the symbol canvas down by an integer factor */
 static void ex_resolve(spr_t*s,int f){
@@ -251,30 +270,103 @@ static void ex_pip_art(int suit){
     cv_ellipse(U(36),U(32),U(6),U(4),0xFFFFFF,0xFFFFFF,80);
     break;
   }
-  ex_resolve(&pipBig[suit],3);
-  ex_resolve(&pipMid[suit],8);
+  ex_resolve(&pipBig[suit],4);
   ex_resolve(&pipMini[suit],12);
   ex_resolve(&pipSm[suit],16);
 }
 
+/*  A neon suit sign as a white sprite: the lounge's pip shape drawn as a
+ *  glass tube (outline) with its halo when glow > 0.  Tinted at run time,
+ *  so one sprite serves every colour and every power.                 */
+static void ex_neon_pip_bake(spr_t*s,int suit,int sz,float size,float tube,float glow){
+  static const int LS[4]={ LSUIT_H, LSUIT_D, LSUIT_C, LSUIT_S };
+  LCanvas cv;
+  memset(s,0,sizeof *s);
+  if(!lz_cv_new(&cv,sz,sz)) return;
+  LFillOpt o; memset(&o,0,sizeof o);
+  o.outline=tube; o.glow=glow;
+  LCol w=lrc(1,1,1,1);
+  lart_pip(&cv,LS[suit],sz*0.5f,sz*0.5f,size,0,w,w,&o);
+  lz_cv_to_spr(&cv,s);
+}
+
+/*  The back, the lounge's: a gold rim round dark glass with a cyan
+ *  honeycomb in it, and the bee in a gold hexagon - the poker game's
+ *  deck, so the two cabinets deal the same cards.                      */
+static void ex_build_back(void){
+  LCanvas cv;
+  if(!lz_cv_new(&cv,CDW,CDH)) return;
+  const float cx=CDW*0.5f, cy=CDH*0.5f;
+  LShape card[1]={ { LSH_RBOX, LOP_UNION, { cx, cy, cx, cy, 13 }, NULL, 0 } };
+  LPaint base=lpaint_linear(lz_col(0x0E2226,1),0,0,lz_col(0x04090C,1),0,(float)CDH);
+  lcv_fill(&cv,NULL,card,1,&base,NULL);
+  LShape field[1]={ { LSH_RBOX, LOP_UNION, { cx, cy, cx-11, cy-11, 7 }, NULL, 0 } };
+  LHoneyParams hp={ 10.0f, lz_col(0x061418,1), lz_col(0x3FCBE0,0.85f), lz_col(0x0F4450,1), 1.1f, 0x7A11u, 0.22f };
+  LPaint hc=lpaint_fn(lart_honeycomb,&hp);
+  lcv_fill(&cv,NULL,field,1,&hc,NULL);
+  LFillOpt tg; memset(&tg,0,sizeof tg);                 /* a cyan tube inside the rim */
+  tg.outline=1.4f; tg.glow=4.0f; tg.opacity=0.9f;
+  LPaint cyan=lpaint_solid(lz_col(lz_hot(LZ_CYAN,0.3f),1));
+  lcv_fill(&cv,NULL,field,1,&cyan,&tg);
+  LFillOpt rim; memset(&rim,0,sizeof rim);              /* the gold rim */
+  rim.outline=7.0f; rim.offset=-3.5f;
+  LBrassParams bp={ 0.6f, 31, 0.8f };
+  LPaint brass=lpaint_fn(lart_brass,&bp);
+  lcv_fill(&cv,NULL,card,1,&brass,&rim);
+  /* the medallion: a dark hexagon, honey light round it, a gold edge */
+  LShape hex[1]={ { LSH_HEX, LOP_UNION, { cx, cy, 44, 1 }, NULL, 0 } };
+  LFillOpt hg; memset(&hg,0,sizeof hg);
+  hg.glow=9.0f; hg.opacity=0.8f;
+  LPaint honey=lpaint_solid(lz_col(LZ_HONEY,1));
+  lcv_fill(&cv,NULL,hex,1,&honey,&hg);
+  LPaint dark=lpaint_radial(lz_col(0x2A1A0A,1),cx,cy-10,lz_col(0x0A0604,1),48);
+  lcv_fill(&cv,NULL,hex,1,&dark,NULL);
+  LFillOpt he; memset(&he,0,sizeof he);
+  he.outline=5.0f;
+  lcv_fill(&cv,NULL,hex,1,&brass,&he);
+  lart_bee(&cv,cx+3,cy+1,27,-0.08f,1.0f,1);
+  lz_cv_to_spr(&cv,&cardBack);
+}
+
+static void ex_bake_alpha(spr_t*s,int w,int h,void(*paint)(void));
+/* the card index, one rank in one colour, its caps 3 px below the top */
+static const char*exBkStr;
+static uint32_t exBkCol;
+static void ex_paint_rank(void){
+  const lz_font*F=&lzf[LZF_UI_L];
+  float size=34.0f, k=size/F->base;
+  lz_text(LZF_UI_L,exBkStr,RKW*0.5f,3.0f-F->capTop*k,size,exBkCol,LZ_CENTER);
+}
+
 static void ex_build_cards(void){
   for(int s=0;s<4;s++) ex_pip_art(s);
-  { static const uint32_t gold[5]={0xFFFBE0,0xFFDE78,0xD8A01C,0x8E6208,0x503802};
-    cv_clear(); seven_shape(46,48,0.95f,gold,5,0); ex_resolve(&sevenSm,18); }
+  for(int s=0;s<4;s++){
+    ex_neon_pip_bake(&pipNeon[s],s,72,22.0f,2.8f,5.0f);
+    ex_neon_pip_bake(&pipCore[s],s,72,22.0f,1.4f,0.0f);
+    ex_neon_pip_bake(&pipNeonSm[s],s,44,13.0f,2.0f,3.5f);
+    ex_neon_pip_bake(&pipCoreSm[s],s,44,13.0f,1.0f,0.0f);
+  }
+  static const uint32_t INK[2]={0xC8101E,0x1A1622};
+  for(int c=0;c<2;c++) for(int r=0;r<13;r++){
+    exBkStr=RANKS[r]; exBkCol=INK[c];
+    ex_bake_alpha(&rankSpr[c][r][0],RKW,RKH,ex_paint_rank);
+    spr_t*d=&rankSpr[c][r][1];
+    if(ex_spr_new(d,RKW,RKH)){ ex_over(d,&rankSpr[c][r][0],0,0,255,1); spr_bounds(d); }
+  }
 
   /* faces: ivory stock, a gold pinstripe, one big pip, corner pips */
   for(int s=0;s<4;s++){
     spr_t*c=&cardFace[s];
-    ex_blank(c,CDW,CDH,15.0f,0xFFFFFF,0xEAE2CF);
+    ex_blank(c,CDW,CDH,13.0f,0xFFFFFF,0xEAE2CF);
     if(!c->px) continue;
     for(int y=0;y<CDH;y++) for(int x=0;x<CDW;x++){
-      float d=rr_sdf(x+0.5f,y+0.5f,CDW*0.5f,CDH*0.5f,CDW*0.5f-9,CDH*0.5f-9,8.0f);
+      float d=rr_sdf(x+0.5f,y+0.5f,CDW*0.5f,CDH*0.5f,CDW*0.5f-8,CDH*0.5f-8,7.0f);
       float v=clampf(1.0f-fabsf(d)/0.9f,0,1);
       if(v>0) ex_px_over(c,x,y,0xC49A40,(int)(v*210));
     }
-    ex_over(c,&pipBig[s],CDW/2-pipBig[s].w/2,CDH/2-pipBig[s].h/2+10,255,0);
-    ex_over(c,&pipSm[s],16,44,255,0);
-    ex_over(c,&pipSm[s],CDW-16-pipSm[s].w,CDH-44-pipSm[s].h,255,1);
+    ex_over(c,&pipBig[s],CDW/2-pipBig[s].w/2,CDH/2-pipBig[s].h/2+8,255,0);
+    ex_over(c,&pipSm[s],13,42,255,0);
+    ex_over(c,&pipSm[s],CDW-13-pipSm[s].w,CDH-42-pipSm[s].h,255,1);
     spr_bounds(c);
 
     spr_t*m=&cardMini[s];
@@ -282,50 +374,7 @@ static void ex_build_cards(void){
     ex_over(m,&pipMini[s],MCW/2-pipMini[s].w/2,MCH-pipMini[s].h-6,255,0);
     spr_bounds(m);
   }
-
-  /* the back: crimson lattice of gold sevens, the WILD 7 medallion */
-  spr_t*b=&cardBack;
-  ex_blank(b,CDW,CDH,15.0f,0xF8F2E4,0xE6DCC6);
-  if(!b->px) return;
-  const float cx=CDW*0.5f, cy=CDH*0.5f;
-  for(int y=0;y<CDH;y++) for(int x=0;x<CDW;x++){
-    float d=rr_sdf(x+0.5f,y+0.5f,cx,cy,cx-9,cy-9,9.0f);
-    float cov=clampf(0.5f-d,0,1);
-    if(cov<=0) continue;
-    uint32_t c=mixc(0xB8162A,0x520712,(float)y/CDH);
-    float u=(x+y)/22.0f, v=(x-y+400)/22.0f;
-    float du=fabsf(u-floorf(u+0.5f))*22.0f*0.7071f, dv=fabsf(v-floorf(v+0.5f))*22.0f*0.7071f;
-    float ln=fmaxf(clampf(1.0f-du/1.0f,0,1),clampf(1.0f-dv/1.0f,0,1));
-    c=mixc(c,0xF0C860,ln*0.50f);
-    c=mixc(c,0xF4CC5A,clampf(1.0f+d/2.4f,0,1));             /* gold rule */
-    ex_px_over(b,x,y,c,(int)(cov*255));
-  }
-  for(int k=-12;k<24;k++) for(int m=-12;m<24;m++){
-    float u=k+0.5f, v=m+0.5f;
-    float px=((u+v)*22.0f-400.0f)*0.5f, py=((u-v)*22.0f+400.0f)*0.5f;
-    if(px<20||px>CDW-20||py<20||py>CDH-20) continue;
-    float ex=(px-cx)/70.0f, ey=(py-cy)/92.0f;
-    if(ex*ex+ey*ey<1.0f) continue;
-    ex_over(b,&sevenSm,(int)px-sevenSm.w/2,(int)py-sevenSm.h/2,150,0);
-  }
-  for(int y=0;y<CDH;y++) for(int x=0;x<CDW;x++){             /* medallion plate */
-    float ex=(x+0.5f-cx)/62.0f, ey=(y+0.5f-cy)/82.0f;
-    float r=sqrtf(ex*ex+ey*ey);
-    if(r>1.0f) continue;
-    float cov=clampf((1.0f-r)*62.0f,0,1);
-    uint32_t c=mixc(0x3A0810,0x120204,r);
-    if(r>0.90f) c=mixc(0xFFE9A0,0x8A5A10,clampf((r-0.90f)/0.10f,0,1));
-    ex_px_over(b,x,y,c,(int)(cov*255));
-  }
-  if(sym[SY_SEVEN].px) ex_over(b,&sym[SY_SEVEN],(int)cx-sym[SY_SEVEN].w/2+2,(int)cy-sym[SY_SEVEN].h/2+2,255,0);
-  for(int y=0;y<CDH;y++) for(int x=0;x<CDW;x++){             /* a sheen */
-    uint8_t*p=b->px+((size_t)y*CDW+x)*4;
-    if(!p[3]) continue;
-    float t=(x+y*0.6f-40.0f)/60.0f;
-    if(t<0||t>1) continue;
-    ex_px_over(b,x,y,0xFFFFFF,(int)(sinf(t*3.14159f)*34.0f));
-  }
-  spr_bounds(b);
+  ex_build_back();
 }
 
 /* ── the cloud bank ─────────────────────────────────────────────────
@@ -416,104 +465,56 @@ static void ex_build_clouds(void){
   }
 }
 
-/* ── the felt table, painted once through the normal primitives ───── */
-static void ex_plate(int x,int y,int w,int h,uint32_t hi,uint32_t lo,uint32_t rim){
-  fb_rrect(x+5,y+7,w,h,16,0x000000,150);
-  fb_rrectg(x,y,w,h,16,hi,lo,255);
-  for(int j=0;j<h/3;j++) for(int i=8;i<w-8;i++) fb_blend(x+i,y+3+j,0xFFFFFF,(h/3-j)*2);
-  fb_rframe(x,y,w,h,16,3.0f,rim,255);
-  fb_rframe(x+6,y+6,w-12,h-12,11,1.0f,scalec(rim,0.55f),220);
+/* -- the glass table, painted once through the kit ------------------ */
+/* static lettering on the table: the UI face, top at y */
+static void ex_label(const char*s,float x,float y,float size,uint32_t col,float spacing){
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=col; st.align=LZ_CENTER; st.spacing=spacing;
+  st.shadow=0x000000; st.shadow_k=0.8f;
+  lz_text_ex(LZF_UI_M,s,x,y,size,&st);
 }
 static void ex_build_table(void){
   const int x0=TX0, y0=TY0, w=TW, h=TH;
-  fb_rrect(x0,y0,w,h,20,0x000000,255);
-  /* felt: a spotlit green with a fine nap */
-  for(int y=y0;y<y0+h;y++) for(int x=x0;x<x0+w;x++){
-    float d=rr_sdf(x+0.5f,y+0.5f,x0+w*0.5f,y0+h*0.5f,w*0.5f-13,h*0.5f-13,12.0f);
-    float cov=clampf(0.5f-d,0,1);
-    if(cov<=0) continue;
-    float dx=(x-FBW*0.5f)/430.0f, dy=(y-(y0+250.0f))/390.0f;
-    float v=clampf(1.0f-(dx*dx+dy*dy),0,1);
-    uint32_t c=mixc(0x03200E,0x178C4E,0.08f+0.92f*v*v);
-    float sh=clampf(1.0f+d/16.0f,0,1);               /* the rail's shadow */
-    c=scalec(c,1.0f-0.62f*sh*sh);
-    int n=(int)(ex_h((uint32_t)(x*7919+y*104729))&15)-8;
-    if(((x+y)&3)==0) n-=3;
-    int r=clampi((int)((c>>16)&255)+n/2,0,255), g=clampi((int)((c>>8)&255)+n,0,255), b=clampi((int)(c&255)+n/2,0,255);
-    fb_blend(x,y,RGB(r,g,b),(int)(cov*255));
+  /*  The lounge's plum honeycomb room under dark glass with a magenta
+   *  tube round it, as the poker game's double-up panel.  The room is
+   *  painted over the whole scratch frame; only the table is kept.     */
+  lz_paint_room(fb,0);
+  fb_rframe(x0,y0,w,h,20,5.0f,0x0A0608,255);           /* the reel frame's dark lip */
+  lz_glass(GLX,GLY,GLW,GLH,LZ_MAGENTA,1.0f,1.0f);
+  lz_well(FBW/2-POTW/2,POTY,POTW,POTH,12);
+  /* a faint rule over the controls line */
+  for(int x=GLX+30;x<GLX+GLW-30;x++){
+    float u=(float)(x-GLX-30)/(GLW-60), v=sinf(u*3.14159f);
+    fb_blend(x,PROMPTY-12,LZ_MAGENTA,(int)(90*v));
   }
-  /* rail: brushed chrome, a gold rule, a dark inner step - like the reels */
-  for(int k=0;k<7;k++){
-    float v=0.30f+0.70f*fabsf(cosf(k*0.62f));
-    fb_rframe(x0+1+k,y0+1+k,w-2-2*k,h-2-2*k,19.0f-k,1.0f,mixc(0x333A4C,0xF2F6FF,v),255);
-  }
-  fb_rframe(x0+8,y0+8,w-16,h-16,14,3.0f,0xF0C24A,255);
-  fb_rframe(x0+12,y0+12,w-24,h-24,12,1.5f,0x3A2804,255);
-  /* printed on the felt */
-  fb_rframe(x0+26,y0+26,w-52,h-52,10,1.2f,0xD8B050,70);
-  fb_rframe(FBW/2-CDW/2-6,CARDY-6,CDW+12,CDH+12,20,1.5f,0xE8C060,90);
-  led_window(FBW/2-126,118,252,46);
-  text("YOUR WIN",REDX+PLW/2,134,2,0xE8D8A8,1,1);
-  /* the two colour bets */
-  ex_plate(REDX,PLY,PLW,PLH,0xE0283A,0x520612,0xFFD24A);
-  textb("RED",REDX+PLW/2,PLY+14,5,SILVERG,4,1);
-  blit(&pipMid[0],REDX+PLW/2-pipMid[0].w-3,PLY+62,0,FBH,255,0,0.0f);
-  blit(&pipMid[1],REDX+PLW/2+3,PLY+62,0,FBH,255,0,0.0f);
-  text("PAYS X2",REDX+PLW/2,PLY+124,2,0xFFE9A8,1,1);
-  text("<  LEFT",REDX+PLW/2,PLY+PLH+10,2,0xCFE8D8,1,1);
-  ex_plate(BLKX,PLY,PLW,PLH,0x4A5068,0x0A0B12,0xFFD24A);
-  textb("BLACK",BLKX+PLW/2,PLY+14,5,SILVERG,4,1);
-  blit(&pipMid[2],BLKX+PLW/2-pipMid[2].w-3,PLY+62,0,FBH,255,0,0.0f);
-  blit(&pipMid[3],BLKX+PLW/2+3,PLY+62,0,FBH,255,0,0.0f);
-  text("PAYS X2",BLKX+PLW/2,PLY+124,2,0xFFE9A8,1,1);
-  text("RIGHT  >",BLKX+PLW/2,PLY+PLH+10,2,0xCFE8D8,1,1);
+  /* what the signs pay, under their live line */
+  ex_label("PAYS X2",SIGNL,352,20,LZ_DIM,3);
+  ex_label("PAYS X2",SIGNR,352,20,LZ_DIM,3);
   /* the suit call */
-  text("SUIT PAYS X4",LBLX,CHIPY+8,2,0xFFE9A8,1,1);
-  text("UP / DOWN",LBLX,CHIPY+32,2,0xCFE8D8,1,1);
-  text("X PLAYS IT",LBRX,CHIPY+8,2,0xFFE9A8,1,1);
-  text("LAST CARDS",LBLX,HISTY+24,2,0xCFE8D8,1,1);
+  ex_label("SUIT PAYS X4",LBLX,CHIPY+2,22,LZ_GOLD,1);
+  ex_label("STICK UP / DOWN",LBLX,CHIPY+28,19,LZ_DIM,2);
+  ex_label("BET MAX PLAYS IT",LBRX,CHIPY+2,22,LZ_GOLD,1);
+  ex_label("LAST CARDS",LBLX,HISTY+22,20,LZ_DIM,3);
   for(int i=0;i<4;i++){                              /* the four suit chips */
-    int x=CHIPX0+i*(CHIPW+8), y=CHIPY;
-    fb_rrect(x+3,y+5,CHIPW,CHIPH,12,0x000000,130);
-    fb_rrectg(x,y,CHIPW,CHIPH,12,0xFFF6DA,0xD2C6A2,255);
-    blit(&pipMini[i],x+CHIPW/2-pipMini[i].w/2,y+CHIPH/2-pipMini[i].h/2,0,FBH,255,0,0.0f);
-    fb_rframe(x,y,CHIPW,CHIPH,12,1.5f,0x5A5040,255);
+    int x=CHIPX0+i*(CHIPW+CHIPG), y=CHIPY;
+    uint32_t tube=i<2?TUBE_RED:TUBE_BLK;
+    lz_button(x,y,CHIPW,CHIPH,tube,0);
+    const spr_t*g=&pipNeonSm[i], *c=&pipCoreSm[i];
+    lz_add_tint(g,x+CHIPW/2-g->w/2,y+CHIPH/2-g->h/2,tube,110);
+    lz_add_tint(c,x+CHIPW/2-c->w/2,y+CHIPH/2-c->h/2,lz_hot(tube,0.5f),90);
   }
-  { int x=COLX, y=HISTY, bw=COLW, bh=MCH;               /* COLLECT */
-    fb_rrect(x+3,y+6,bw,bh,14,0x000000,160);
-    fb_rrectg(x,y,bw,bh,14,0xFFF0B8,0xC08A10,255);
-    for(int j=0;j<bh/3;j++) for(int i=8;i<bw-8;i++) fb_blend(x+i,y+2+j,0xFFFFFF,(bh/3-j)*3);
-    fb_rframe(x,y,bw,bh,14,2.0f,0x3A2404,255);
-    text("A COLLECT",x+bw/2,y+12,3,0x2A1400,1,0); }
 
   tblImg=(uint32_t*)malloc((size_t)w*h*4);
   if(tblImg) for(int y=0;y<h;y++) memcpy(tblImg+(size_t)y*w,fb+(size_t)(y0+y)*FBW+x0,(size_t)w*4);
 }
 
-/*  Paint a rounded panel with the ordinary primitives on a scratch patch
- *  of the frame (init time, so the next render covers it), then lift it
- *  into a sprite whose alpha is the panel's own outline.  Panels that
- *  never change are then one blit instead of a stack of distance-field
- *  rounded rects every frame.                                          */
-static void ex_bake_panel(spr_t*s,int w,int h,float rad,void(*paint)(int,int,int,int)){
-  if(!ex_spr_new(s,w,h)) return;
-  for(int y=0;y<h;y++) memset(fb+(size_t)y*FBW,0,(size_t)w*4);
-  paint(0,0,w,h);
-  for(int y=0;y<h;y++) for(int x=0;x<w;x++){
-    float d=rr_sdf(x+0.5f,y+0.5f,w*0.5f,h*0.5f,w*0.5f,h*0.5f,rad);
-    float cov=clampf(0.5f-d,0,1);
-    uint32_t c=fb[(size_t)y*FBW+x];
-    uint8_t*o=s->px+((size_t)y*w+x)*4;
-    o[0]=(uint8_t)(c>>16); o[1]=(uint8_t)(c>>8); o[2]=(uint8_t)c; o[3]=(uint8_t)(cov*255);
-  }
-  spr_bounds(s);
-}
 /*  Lift anything the primitives can paint into a sprite with true
  *  alpha: paint it once on black and once on white.  Every primitive is
  *  a blend over what is underneath, so the result is linear in the
  *  background - on black it is colour times coverage, and the white
- *  pass shows how much background is left.  Used for the big title,
- *  whose bubble type is far too costly to rasterise mid-storm.         */
+ *  pass shows how much background is left.  Additive light (a text
+ *  glow) is not linear in this sense, so glows go through
+ *  ex_bake_glow() instead.                                             */
 static void ex_bake_alpha(spr_t*s,int w,int h,void(*paint)(void)){
   if(!ex_spr_new(s,w,h)) return;
   uint32_t*b0=(uint32_t*)malloc((size_t)w*h*4);
@@ -539,27 +540,78 @@ static void ex_bake_alpha(spr_t*s,int w,int h,void(*paint)(void)){
   free(b0);
   spr_bounds(s);
 }
-#define TITW 600
-#define TITH 124
-static spr_t titleSpr;                  /* the big 7 STRIKE */
-static void ex_paint_title(void){ textb("7 STRIKE",TITW/2,16,11,ELECG,5,1); }
+/*  An additive glow as a white sprite: paint it on black and keep the
+ *  light as alpha, to be added back in any colour with lz_add_tint().  */
+static void ex_bake_glow(spr_t*s,int w,int h,void(*paint)(void)){
+  if(!ex_spr_new(s,w,h)) return;
+  for(int y=0;y<h;y++) memset(fb+(size_t)y*FBW,0,(size_t)w*4);
+  paint();
+  for(int y=0;y<h;y++) for(int x=0;x<w;x++){
+    uint32_t c=fb[(size_t)y*FBW+x];
+    int m=(int)((c>>16)&255), g=(int)((c>>8)&255), b=(int)(c&255);
+    if(g>m) m=g;
+    if(b>m) m=b;
+    uint8_t*o=s->px+((size_t)y*w+x)*4;
+    o[0]=o[1]=o[2]=255; o[3]=(uint8_t)m;
+  }
+  spr_bounds(s);
+}
 
-static void ex_paint_pill(int x,int y,int w,int h){
-  fb_rrectg(x,y,w,h,h*0.5f,0xFFF6CC,0xC08A10,255);
-  for(int j=0;j<h/3;j++) for(int i=h/2;i<w-h/2;i++) fb_blend(x+i,y+2+j,0xFFFFFF,(h/3-j)*6);
-  fb_rframe(x,y,w,h,h*0.5f,2.0f,0x5E3A04,255);
-  blit(&pipMini[0],x+14,y+h/2-pipMini[0].h/2,0,FBH,255,0,0.0f);
-  blit(&pipMini[3],x+w-14-pipMini[3].w,y+h/2-pipMini[3].h/2,0,FBH,255,0,0.0f);
-  text("X = GAMBLE",x+w/2-50,y+h/2-10,3,0x2A1400,1,0);
-  text("DOUBLE",x+w/2+98,y+h/2-12,1,0x4A2A04,1,0);
-  text("OR NOTHING",x+w/2+98,y+h/2+2,1,0x4A2A04,1,0);
+/*  The big 7 STRIKE: the lounge's gold display type (cream to amber, a
+ *  dark rim) baked once, and its halo baked apart so the storm can light
+ *  it cyan.  A 100 px string is far too costly to rasterise mid-storm.  */
+#define TITW 660
+#define TITH 132
+#define TITS 100.0f
+static spr_t titleSpr, titleGlow;
+static void ex_title_style(lz_style*st,int glow){
+  memset(st,0,sizeof *st);
+  st->align=LZ_CENTER;
+  if(glow){ st->glow=0xFFFFFF; st->glow_k=1.0f; return; }   /* face black: light only */
+  st->color=0xFFF6C4; st->color2=0xD68016; st->grad=1;
+  st->outline=0x5A2808; st->outline_px=TITS*0.045f;
 }
-static void ex_paint_plate(int x,int y,int w,int h){
-  fb_rrectg(x,y,w,h,14,0x0C1838,0x02040E,255);
-  fb_rframe(x,y,w,h,14,2.5f,0x4F9CFF,255);
-  fb_rframe(x+5,y+5,w-10,h-10,10,1.0f,0x1A3A7A,255);
-  textb("7 STRIKE",x+186,y+10,4,ELECG,5,1);
+static void ex_paint_title(void){ lz_style st; ex_title_style(&st,0); lz_text_ex(LZF_DISP_L,"7 STRIKE",TITW*0.5f,14,TITS,&st); }
+static void ex_paint_title_glow(void){ lz_style st; ex_title_style(&st,1); lz_text_ex(LZF_DISP_L,"7 STRIKE",TITW*0.5f,14,TITS,&st); }
+
+/*  The gamble offer: a dark glass pill with a magenta tube, the BET MAX
+ *  icon lit where that button is, then what it does.  Its width is set
+ *  by its lettering, measured here once.                               */
+#define PLM 18                          /* room for the neon's glow round a pill */
+#define PILLH 44
+#define PILLS1 23.0f                    /* BET MAX: GAMBLE, display face    */
+#define PILLS2 17.0f                    /* DOUBLE OR NOTHING, UI face       */
+static int pillW;
+static void ex_paint_pill(void){
+  const int x=PLM, y=PLM, w=pillW, h=PILLH;
+  lz_glass(x,y,w,h,LZ_MAGENTA,0.9f,1.0f);
+  const float ih=18.0f;
+  float cx=x+18.0f;
+  cx+=lz_icon(cx,y+h*0.5f-ih*0.5f,ih,wp_mask(B_X),lz_hot(LZ_MAGENTA,0.2f),255)+12.0f;
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=0xFFF6C4; st.color2=0xE8A020; st.grad=1; st.outline=0x3A1808; st.outline_px=1.2f;
+  const lz_font*F=&lzf[LZF_DISP_S];
+  float k=PILLS1/F->base;
+  lz_text_ex(LZF_DISP_S,"BET MAX: GAMBLE",cx,y+h*0.5f-F->capH*k*0.5f-F->capTop*k,PILLS1,&st);
+  cx+=lz_width(LZF_DISP_S,"BET MAX: GAMBLE",PILLS1,0)+16.0f;
+  const lz_font*U2=&lzf[LZF_UI_M];
+  float k2=PILLS2/U2->base;
+  memset(&st,0,sizeof st); st.color=0xFFAAEB; st.spacing=2;
+  lz_text_ex(LZF_UI_M,"DOUBLE OR NOTHING",cx,y+h*0.5f-U2->capH*k2*0.5f-U2->capTop*k2,PILLS2,&st);
 }
+static void ex_build_pill(void){
+  pillW=(int)(18+lz_icon_w(18.0f)+12+lz_width(LZF_DISP_S,"BET MAX: GAMBLE",PILLS1,0)+16
+              +lz_width(LZF_UI_M,"DOUBLE OR NOTHING",PILLS2,2)+30);
+  ex_bake_alpha(&pillSpr,pillW+2*PLM,PILLH+2*PLM,ex_paint_pill);
+}
+
+/*  The 7 STRIKE plate over the marquee: dark glass with a cyan tube.
+ *  Its lettering is drawn live (cached strings), so only the glass is
+ *  baked here.                                                         */
+#define PLATEW 420
+#define PLATEH 50
+#define PLATEY 5
+static void ex_paint_plate(void){ lz_glass(PLM,PLM,PLATEW,PLATEH,LZ_CYAN,1.0f,1.0f); }
 /* a thick antialiased stroke straight into a sprite (init only) */
 static void ex_spr_line(spr_t*s,float x0,float y0,float x1,float y1,float r,uint32_t col){
   float dx=x1-x0, dy=y1-y0, L2=dx*dx+dy*dy; if(L2<0.01f) L2=0.01f;
@@ -570,7 +622,7 @@ static void ex_spr_line(spr_t*s,float x0,float y0,float x1,float y1,float r,uint
       if(c>0) ex_px_over(s,x,y,col,(int)(c*255));
     }
 }
-/* the storm's WILD 7: blue-lit backing, the seven, the lightning badge */
+/* the storm's WILD 7: a cyan-lit backing, the seven, a gold lightning badge */
 static void ex_build_stormwild(void){
   spr_t*s=&stormWild;
   if(!ex_spr_new(s,CW,CH)) return;
@@ -578,17 +630,17 @@ static void ex_build_stormwild(void){
   for(int y=0;y<CH;y++) for(int x=0;x<CW;x++){
     float dx=(x+0.5f-CW*0.5f)/R, dy=(y+0.5f-CH*0.5f)/R;
     float v=clampf(1.0f-sqrtf(dx*dx+dy*dy),0,1); v*=v;
-    ex_px_over(s,x,y,0x6FC8FF,(int)(v*0.46f*255));
+    ex_px_over(s,x,y,0x50D8FF,(int)(v*0.46f*255));
   }
   for(int y=0;y<CH;y++) for(int x=0;x<CW;x++){          /* the lit cell rim */
     float d=rr_sdf(x+0.5f,y+0.5f,CW*0.5f,CH*0.5f,CW*0.5f-4,CH*0.5f-3,10.0f);
     float v=clampf(1.75f-fabsf(d+1.4f),0,1);
-    if(v>0) ex_px_over(s,x,y,0x8FD8FF,(int)(v*235));
+    if(v>0) ex_px_over(s,x,y,0x9AF0FF,(int)(v*235));
   }
   if(sym[SY_SEVEN].px) ex_over(s,&sym[SY_SEVEN],SOX,SOY,255,0);
   static const float BZ[4][2]={{20,9},{13,20},{19,20},{12,31}};
-  for(int k=0;k<3;k++) ex_spr_line(s,BZ[k][0],BZ[k][1],BZ[k+1][0],BZ[k+1][1],2.6f,0x0A1430);
-  for(int k=0;k<3;k++) ex_spr_line(s,BZ[k][0],BZ[k][1],BZ[k+1][0],BZ[k+1][1],1.2f,0xFFF27A);
+  for(int k=0;k<3;k++) ex_spr_line(s,BZ[k][0],BZ[k][1],BZ[k+1][0],BZ[k+1][1],2.6f,0x1A0A20);
+  for(int k=0;k<3;k++) ex_spr_line(s,BZ[k][0],BZ[k][1],BZ[k+1][0],BZ[k+1][1],1.2f,0xFFD25A);
   spr_bounds(s);
 }
 
@@ -603,9 +655,10 @@ static void extra_init(void){
   ex_build_cards();
   ex_build_table();
   ex_build_stormwild();
-  ex_bake_panel(&pillSpr,420,40,20.0f,ex_paint_pill);
-  ex_bake_panel(&plateSpr,520,48,14.0f,ex_paint_plate);
+  ex_build_pill();
+  ex_bake_alpha(&plateSpr,PLATEW+2*PLM,PLATEH+2*PLM,ex_paint_plate);
   ex_bake_alpha(&titleSpr,TITW,TITH,ex_paint_title);
+  ex_bake_glow(&titleGlow,TITW,TITH,ex_paint_title_glow);
   /* the cards cast their shadow from the sprite itself, so it turns with
      them and costs nothing extra at run time */
   for(int s=0;s<4;s++) bake_shadow(&cardFace[s],8,10,5,150);
@@ -751,10 +804,10 @@ static void ex_bolt(float sx,float sy,float ex,float ey,uint32_t sd,float I,floa
   int last=(int)(upto*(n-1));
   if(last<1) return;
   float R=big?17.0f:12.0f, S=big?9.0f:7.0f, k=0.72f*I;
-  ex_halo(p,last+1,R,S,(int)(55*k),(int)(100*k),(int)(255*k));
+  ex_halo(p,last+1,R,S,(int)(40*k),(int)(150*k),(int)(255*k));
   for(int j=0;j<last;j++)
     ex_seg(p[j].x,p[j].y,p[j+1].x,p[j+1].y,big?4.5f:3.0f,big?2.4f:1.6f,
-           (int)(90*I),(int)(140*I),(int)(255*I),(int)(255*I),(int)(255*I),(int)(255*I));
+           (int)(70*I),(int)(190*I),(int)(255*I),(int)(255*I),(int)(255*I),(int)(255*I));
   int nb=big?2:1;
   for(int b=0;b<nb;b++){
     int k0=6+(int)(ex_hf(sd,900u+b)*18.0f);
@@ -764,11 +817,11 @@ static void ex_bolt(float sx,float sy,float ex,float ey,uint32_t sd,float I,floa
     float len=(big?70.0f:40.0f)+ex_hf(sd,930u+b)*(big?110.0f:50.0f);
     pt_t q[9]; ex_bolt_pts(q,3,p[k0].x,p[k0].y,p[k0].x+cosf(ang)*len,p[k0].y+sinf(ang)*len,sd*31u+b,0.6f);
     float f=I*0.6f;
-    ex_halo(q,6,R*0.6f,S*0.7f,(int)(40*f),(int)(80*f),(int)(220*f));
+    ex_halo(q,6,R*0.6f,S*0.7f,(int)(40*f),(int)(130*f),(int)(230*f));
     for(int j=0;j<8;j++){
       float g=f*(1.0f-j/9.0f);
       ex_seg(q[j].x,q[j].y,q[j+1].x,q[j+1].y,2.6f,1.2f,
-             (int)(70*g),(int)(120*g),(int)(255*g),(int)(230*g),(int)(240*g),(int)(255*g));
+             (int)(60*g),(int)(170*g),(int)(255*g),(int)(230*g),(int)(245*g),(int)(255*g));
     }
   }
 }
@@ -814,21 +867,6 @@ static void ex_blit_sc(const spr_t*s,int cx,int cy,float scx,float scy,int cy0,i
       uint32_t d=q[x];
       int dr=(d>>16)&255, dg=(d>>8)&255, db=d&255;
       q[x]=RGB(dr+((r-dr)*a>>8),dg+((g-dg)*a>>8),db+((b-db)*a>>8));
-    }
-  }
-}
-
-/* text rotated half a turn, for the lower card index; (x,y) top-left */
-static void ex_text180(const char*s,int x,int y,int px,uint32_t col){
-  int n=(int)strlen(s), adv=px*6, W=n*adv-px, H=7*px;
-  for(int i=0;i<n;i++){
-    int ch=(unsigned char)s[i];
-    if(ch<32||ch>127) ch='?';
-    const uint8_t*gl=FONT[ch-32];
-    for(int r=0;r<7;r++) for(int c=0;c<5;c++){
-      if(!(gl[r]&(0x10>>c))) continue;
-      int gx=x+W-(i*adv+c*px)-px, gy=y+H-r*px-px;
-      for(int j=0;j<px;j++) for(int k=0;k<px;k++) fb_px(gx+k,gy+j,col);
     }
   }
 }
@@ -1052,7 +1090,8 @@ static void ex_cloud_layer(int yoff,int rows,const uint32_t*lut,const int*colA,i
 }
 static void ex_clouds(int yoff,int a256,float flash,float clock){
   if(!clA||a256<=0) return;
-  static const uint32_t DK[3]={0x04060E,0x252C4C,0x7A86B8}, LT[3]={0x34407A,0xA8B6F4,0xFFFFFF};
+  /* plum storm cloud, the lounge's room colour, lit cyan-white by the flash */
+  static const uint32_t DK[3]={0x07040C,0x2A1B3C,0x7C6C9E}, LT[3]={0x363C7E,0xAEC8F8,0xFFFFFF};
   uint32_t lut[256]; int colA[FBW];
   float f=clampf(flash,0,1);
   for(int i=0;i<256;i++){
@@ -1079,7 +1118,7 @@ static void ex_bezel_arcs(float amt){
     for(int s=1;s<=6;s++){
       float j=(ex_hf(sd,10u+s)-0.5f)*14.0f;
       float nx=px+tx*s*11.0f - ty*j, ny=py+ty*s*11.0f + tx*j;
-      ex_seg(lx,ly,nx,ny,7.0f,1.3f,(int)(40*I),(int)(90*I),(int)(220*I),(int)(200*I),(int)(230*I),(int)(255*I));
+      ex_seg(lx,ly,nx,ny,7.0f,1.3f,(int)(40*I),(int)(150*I),(int)(230*I),(int)(200*I),(int)(240*I),(int)(255*I));
       lx=nx; ly=ny;
     }
   }
@@ -1098,12 +1137,12 @@ static void ex_draw_struck(int c,float dt){
   }
   if(dt<0.6f){                                /* impact glow and shock ring */
     float f=1.0f-dt/0.6f;
-    ex_glow(cx,cy,(int)(56+dt*50),(int)(50*f),(int)(95*f),(int)(210*f));
+    ex_glow(cx,cy,(int)(56+dt*50),(int)(40*f),(int)(140*f),(int)(220*f));
     float rr=24.0f+dt*200.0f; int a=(int)(220*f);
     int n=(int)(rr*TAU/3.0f);
     for(int k=0;k<n;k++){
       float an=k*TAU/n; int x=cx+(int)(cosf(an)*rr), y=cy+(int)(sinf(an)*rr);
-      fb_add(x,y,a/2,a*3/4,a); fb_add(x+1,y,a/3,a/2,a*2/3); fb_add(x,y+1,a/3,a/2,a*2/3);
+      fb_add(x,y,a/3,a*7/8,a); fb_add(x+1,y,a/4,a*3/5,a*2/3); fb_add(x,y+1,a/4,a*3/5,a*2/3);
     }
   } else {                                    /* now and then, a crackle */
     uint32_t sd=(uint32_t)(G.t*9.0f)*37u+(uint32_t)c*101u;
@@ -1112,7 +1151,7 @@ static void ex_draw_struck(int c,float dt){
       for(int s2=1;s2<=4;s2++){
         float a1=a0+s2*0.28f, rr=44.0f+(ex_hf(sd,3u+s2)-0.5f)*14.0f;
         float nx=cx+cosf(a1)*rr, ny=cy+sinf(a1)*rr;
-        ex_seg(lx,ly,nx,ny,5.0f,1.2f,40,90,220,200,230,255);
+        ex_seg(lx,ly,nx,ny,5.0f,1.2f,40,150,230,200,240,255);
         lx=nx; ly=ny;
       }
     }
@@ -1130,29 +1169,39 @@ static int ex_reels_still(void){
   return 1;
 }
 
-/* the marquee plate: 7 STRIKE and how many wilds it has thrown */
-static void ex_marquee_plate(int n,float pl){
-  const int x=FBW/2-plateSpr.w/2, y=5;
+/*  The marquee plate: 7 STRIKE as a cyan neon sign that brightens with
+ *  every flash, and how many wilds the storm has thrown in gold.        */
+static void ex_marquee_plate(int n,float pl,float sky){
+  const int x=FBW/2-plateSpr.w/2, y=PLATEY-PLM;
   blit(&plateSpr,x,y,0,FBH,255,0,0.0f);
+  const float gx=(float)(x+PLM), cy=PLATEY+PLATEH*0.5f;
+  lz_neon(LZF_NEON_M,"7 STRIKE",gx+112.0f,cy,40.0f,LZ_CYAN,clampf(0.90f+0.10f*sky,0,1),1.2f);
   char b[32]; snprintf(b,sizeof b,"%d WILD%s",n,n==1?"":"S");
-  text(b,x+plateSpr.w-26,y+15,3,mixc(0xFFE9A8,0xFFFFFF,pl*0.6f),2,1);
+  lz_style st; memset(&st,0,sizeof st);
+  st.align=LZ_RIGHT;
+  st.color=0xFFF6C4; st.color2=mixc(0xE8A020,0xFFFFFF,pl*0.5f); st.grad=1;
+  st.outline=0x3A1808; st.outline_px=1.2f;
+  const lz_font*F=&lzf[LZF_DISP_S];
+  float size=26.0f, k=size/F->base;
+  lz_text_ex(LZF_DISP_S,b,gx+PLATEW-20.0f,cy-F->capH*k*0.5f-F->capTop*k,size,&st);
 }
 
 /* the gamble offer, hung on the bottom of the reel bezel; a shine runs
-   across it so the eye finds it */
+   across its glass so the eye finds it */
 static void ex_gamble_prompt(void){
-  const int w=pillSpr.w, h=pillSpr.h, x=FBW/2-w/2, y=GY+GH-6;
+  const int x=FBW/2-pillSpr.w/2, y=GY+GH-8-PLM;
   blit(&pillSpr,x,y,0,FBH,255,0,0.0f);
+  const int gx=x+PLM, gy=y+PLM, w=pillW, h=PILLH;
   float ph=fmodf(G.t*1.1f,1.6f);
   if(ph<1.0f){
-    int sx=x-40+(int)(ph*(w+80)), k=opt_limiter?70:120;
-    for(int j=4;j<h-4;j++){
+    int sx=gx-40+(int)(ph*(w+80)), k=opt_limiter?40:70;
+    for(int j=5;j<h-5;j++){
       int c0=sx+(j-h/2)/2;
       for(int i=-12;i<=12;i++){
         int xx=c0+i;
-        if(xx<x+h/2||xx>=x+w-h/2) continue;
+        if(xx<gx+14||xx>=gx+w-14) continue;
         int v=k*(12-abs(i))/12;
-        fb_add(xx,y+j,v,v,v*3/4);
+        fb_add(xx,gy+j,v,v*3/4,v);
       }
     }
   }
@@ -1173,11 +1222,11 @@ static void extra_draw_reels(void){
     clock=E->cloud0+G.t;
   }
   if(dark>0){
-    /* one pass does both: the storm pulls the window toward a deep blue,
-       and while a bolt lights the sky it pulls it toward blue-white
+    /* one pass does both: the storm pulls the window toward a deep indigo,
+       and while a bolt lights the sky it pulls it toward cyan-white
        instead - the whole-screen flash would cost a full-frame pass */
     float amt=lerpf(dark,0.55f,sky);
-    ex_shade(GX,GY,GW,GH,(int)(256*(1.0f-amt)),mixc(0x050A22,0xDDE8FF,sky));
+    ex_shade(GX,GY,GW,GH,(int)(256*(1.0f-amt)),mixc(0x0A0620,0xE0F4FF,sky));
   }
   if(arcs) ex_bezel_arcs(clampf((G.t-0.6f)/0.8f,0,1));
 
@@ -1210,10 +1259,22 @@ static void extra_draw_reels(void){
     if(E->st<0.80f){
       float a=clampf(E->st/0.08f,0,1)*clampf((0.80f-E->st)/0.15f,0,1);
       int by=GY+GH/2-78;
-      ex_shade(GX,by,GW,156,(int)(256*(1.0f-0.75f*a)),0x02040E);
+      ex_shade(GX,by,GW,156,(int)(256*(1.0f-0.75f*a)),0x0A0414);
       if(a>0.3f){
-        blit(&titleSpr,FBW/2-TITW/2,by+22-16,0,FBH,255,0,0.0f);
-        text("LIGHTNING TURNS SYMBOLS WILD",FBW/2,by+120,2,0xCFE8FF,1,1);
+        /* the band is hung between two cyan tubes, the title in gold
+           Bungee lit cyan by the storm */
+        int ta=(int)(255*clampf((a-0.3f)/0.4f,0,1));
+        uint32_t tube=lz_hot(LZ_CYAN,0.45f);
+        fb_rect(GX+24,by+1,GW-48,2,tube,ta*3/4);
+        fb_rect(GX+24,by+153,GW-48,2,tube,ta*3/4);
+        fb_rect(GX+24,by-1,GW-48,6,LZ_CYAN,ta/6);
+        fb_rect(GX+24,by+151,GW-48,6,LZ_CYAN,ta/6);
+        lz_add_tint(&titleGlow,FBW/2-TITW/2,by+4,LZ_CYAN,(int)(ta*(0.55f+0.45f*sky)));
+        blit(&titleSpr,FBW/2-TITW/2,by+4,0,FBH,ta,0,0.0f);
+        lz_style st; memset(&st,0,sizeof st);
+        st.color=0xC8F6FF; st.align=LZ_CENTER; st.spacing=4;
+        st.shadow=0x000000; st.shadow_k=0.8f; st.opacity=ta/255.0f;
+        lz_text_ex(LZF_UI_M,"LIGHTNING TURNS SYMBOLS WILD",FBW/2,by+118,22,&st);
       }
       if(E->st<0.30f){                        /* two bolts nail the title up */
         float I=1.0f-E->st/0.30f;
@@ -1221,7 +1282,7 @@ static void extra_draw_reels(void){
         ex_bolt(GX+GW-150.0f,4.0f,GX+GW-70.0f,(float)by+50,E->seed^0xB2u,I,1.0f,0);
       }
     }
-    if(E->st>=0.80f && clampf((E->endT-E->st)/0.6f,0,1)>0.2f) ex_marquee_plate(E->landed,pl);
+    if(E->st>=0.80f && clampf((E->endT-E->st)/0.6f,0,1)>0.2f) ex_marquee_plate(E->landed,pl,sky);
     for(int i=0;i<E->nStrike;i++){
       float upto, I=ex_bolt_I(E->st-E->boltT[i],&upto);
       if(I<=0) continue;
@@ -1230,10 +1291,10 @@ static void extra_draw_reels(void){
       float ex=(float)cellcx(c/NROW), ey=(float)cellcy(c%NROW);
       float sx=clampf(ex+(ex_hf(sd,1)-0.5f)*320.0f,(float)GX-30,(float)(GX+GW+30)), sy=6.0f+ex_hf(sd,2)*24.0f;
       ex_bolt(sx,sy,ex,ey,sd,I,upto,1);
-      if(upto>=1.0f) ex_glow((int)ex,(int)ey,72,(int)(50*I),(int)(90*I),(int)(200*I));
+      if(upto>=1.0f) ex_glow((int)ex,(int)ey,72,(int)(40*I),(int)(135*I),(int)(210*I));
     }
   } else if(E->stormMask && (G.state==ST_EVAL||G.state==ST_SHOWWIN)){
-    ex_marquee_plate(E->nStrike,0.5f+0.5f*sinf(G.t*4.0f));
+    ex_marquee_plate(E->nStrike,0.5f+0.5f*sinf(G.t*4.0f),0.0f);
   }
 
   /* 5. the gamble offer on a counted win */
@@ -1359,12 +1420,90 @@ static void ex_card(int cx,int top,float sx,int card,int alpha,float sheen){
   /* the sprite carries its shadow 8 right, 10 down: centre the card, not it */
   ex_blit_sc(s,cx+(int)(4*sx),top+CDH/2+5,sx,1.0f,0,FBH,alpha,0xFFFFFF,sheen);
   if(card>=0 && sx>0.92f && alpha>200){
-    int rank=card&15, red=((card>>4)&3)<2;
-    uint32_t col=red?0xC8101E:0x101018;
-    const char*rs=RANKS[rank>12?12:rank];
-    int x0=cx-CDW/2, n=(int)strlen(rs);
-    text(rs,x0+17+(n>1?-4:0),top+15,3,col,0,0);
-    ex_text180(rs,x0+CDW-17-(n*18-3)+(n>1?4:0),top+CDH-15-21,3,col);
+    int rank=card&15, black=((card>>4)&3)>=2, suit=(card>>4)&3;
+    if(rank>12) rank=12;
+    int x0=cx-CDW/2, pc=13+pipSm[suit].w/2;          /* over the corner pips */
+    blit(&rankSpr[black][rank][0],x0+pc-RKW/2,top+11,0,FBH,255,0,0.0f);
+    blit(&rankSpr[black][rank][1],x0+CDW-pc-RKW/2,top+CDH-11-RKH,0,FBH,255,0,0.0f);
+  }
+}
+
+/* a neon suit sign: the tube and its halo in the tube's colour, the hot
+   core over it; power 0..1 */
+static void ex_npip(int small,int suit,int cx,int cy,uint32_t tube,float pw){
+  if(pw<=0.01f) return;
+  const spr_t*g = small ? &pipNeonSm[suit] : &pipNeon[suit];
+  const spr_t*c = small ? &pipCoreSm[suit] : &pipCore[suit];
+  int k=(int)(256*clampf(pw,0,1));
+  lz_add_tint(g,cx-g->w/2,cy-g->h/2,tube,k);
+  lz_add_tint(c,cx-c->w/2,cy-c->h/2,lz_hot(tube,0.62f),k*3/4);
+}
+
+/* a readout in the display face, like lz_readout() but centred on cx */
+static void ex_readout_c(long long v,int cx,int y,float h,uint32_t col){
+  char s[24]; snprintf(s,sizeof s,"%lld",v<0?0:v);
+  int f=lz_disp_font(h);
+  const lz_font*F=&lzf[f];
+  float size=h/F->capH*F->base, k=size/F->base;
+  lz_style st; memset(&st,0,sizeof st);
+  st.align=LZ_CENTER;
+  st.color=mixc(col,0xFFFFFF,0.55f); st.color2=col; st.grad=1;
+  st.glow=col; st.glow_k=0.35f;
+  st.outline=0x000000; st.outline_px=size*0.035f;
+  lz_text_ex(f,s,(float)cx,y-F->capTop*k,size,&st);
+}
+
+/* text in one of the kit's faces with its caps' middle on cy; x is its
+   left edge, centre or right edge by align */
+static void ex_line(int f,const char*s,float x,float cy,float size,uint32_t col,float spacing,float op,int align){
+  const lz_font*F=&lzf[f];
+  float k=size/F->base;
+  lz_style st; memset(&st,0,sizeof st);
+  st.color=col; st.align=align; st.spacing=spacing; st.opacity=op;
+  st.shadow=0x000000; st.shadow_k=0.8f;
+  lz_text_ex(f,s,x,cy-F->capH*k*0.5f-F->capTop*k,size,&st);
+}
+
+/*  A gold banner on a dark glass strip, sized to fit maxw; cy is its
+ *  middle.  The size depends only on the word, so the string cache
+ *  keeps it after its first frame.                                     */
+static void ex_banner(const char*s,int cx,int cy,float maxw,float a){
+  if(a<=0.01f) return;
+  float size=42.0f, w=lz_width(LZF_DISP_M,s,size,0);
+  if(w>maxw){ size*=maxw/w; w=maxw; }
+  int bw=(int)w+44, bh=(int)(size*1.25f);
+  fb_rrect(cx-bw/2,cy-bh/2,bw,bh,bh*0.3f,0x0C0810,(int)(215*a));
+  fb_rframe(cx-bw/2,cy-bh/2,bw,bh,bh*0.3f,1.5f,lz_hot(LZ_HONEY,0.2f),(int)(200*a));
+  lz_gold(LZF_DISP_M,s,(float)cx,(float)cy+size*0.04f,size,a,0.8f);
+}
+
+/*  The controls line, by function and with the panel icon where there
+ *  is a button, truthful to gamble_update(): the stick calls a colour,
+ *  BET MAX (X) plays the chosen suit, SPIN (A / START) collects.       */
+static void ex_controls(float op){
+  static const struct { int bits; uint32_t col; const char*k; const char*v; } IT[4]={
+    { 0, 0, "STICK LEFT:", "RED" }, { 0, 0, "STICK RIGHT:", "BLACK" },
+    { B_X, LZ_MAGENTA, "BET MAX:", "SUIT X4" }, { B_A|B_START, LZ_GOLD, "SPIN:", "COLLECT" } };
+  const float ih=16.0f, iw=lz_icon_w(ih), igap=7.0f, sp=6.0f, gap=24.0f, cy=PROMPTY+10.0f;
+  float size=20.0f, fixed=0, txt=0;
+  for(int i=0;i<4;i++){
+    if(IT[i].bits) fixed+=iw+igap;
+    fixed+=sp+(i?gap:0);
+    txt+=lz_width(LZF_UI_M,IT[i].k,size,1)+lz_width(LZF_UI_M,IT[i].v,size,1);
+  }
+  float avail=GLW-44.0f;
+  if(fixed+txt>avail){ size*=(avail-fixed)/txt; txt=avail-fixed; }
+  float x=FBW*0.5f-(fixed+txt)*0.5f;
+  for(int i=0;i<4;i++){
+    if(i) x+=gap;
+    if(IT[i].bits){
+      lz_icon(x,cy-ih*0.5f,ih,wp_mask(IT[i].bits),lz_hot(IT[i].col,0.2f),(int)(255*op));
+      x+=iw+igap;
+    }
+    ex_line(LZF_UI_M,IT[i].k,x,cy,size,LZ_GOLD,1,op,LZ_LEFT);
+    x+=lz_width(LZF_UI_M,IT[i].k,size,1)+sp;
+    ex_line(LZF_UI_M,IT[i].v,x,cy,size,LZ_IVORY,1,op,LZ_LEFT);
+    x+=lz_width(LZF_UI_M,IT[i].v,size,1);
   }
 }
 
@@ -1376,48 +1515,67 @@ static void gamble_draw(void){
   float t=E->gT, pl=0.5f+0.5f*sinf(G.t*6.0f);
   if(opt_limiter) pl=0.3f+pl*0.4f;
   int ph=E->gPhase, won=E->gWon;
-  int res = (ph==GP_RESULT);
+  int res=(ph==GP_RESULT), pick=(ph==GP_PICK||ph==GP_DEAL), called=(ph==GP_FLIP||res);
+  int lost=res&&!won;
+  long long stake = pick ? E->gPot : E->gFrom;       /* the stake of this round */
   char b[64];
 
-  /* title */
-  const char*title="GAMBLE"; const uint32_t*tg=GOLDG; int tn=5;
-  if(res && won){ title=E->gChoice<2?"DOUBLE!":"SUIT X4!"; if(((int)(G.t*8.0f))&1){ tg=SILVERG; tn=4; } }
-  else if(res){ title="NO LUCK"; tg=REDG; tn=4; }
-  else if(ph==GP_OUT) title = E->gEnd==GE_ROUNDS?"FIVE IN A ROW!":(E->gEnd==GE_LIMIT?"TABLE LIMIT":"COLLECTED");
-  textb(title,FBW/2,66,6,tg,tn,1);
+  /* the caption row: which round, and what is at stake */
+  { int rnd=clampi(E->gRound+(pick?1:0),1,GAMBLE_ROUNDS);
+    snprintf(b,sizeof b,"DOUBLE UP  -  ROUND %d OF %d",rnd,GAMBLE_ROUNDS);
+    ex_line(LZF_UI_M,b,GLX+24.0f,CAPY+10.0f,21,0xFFAAEB,3,1.0f,LZ_LEFT);
+    uint32_t sc=LZ_GOLD;
+    if(pick) snprintf(b,sizeof b,"%lld  DOUBLES TO  %lld",stake,stake*2);
+    else if(ph==GP_FLIP){
+      snprintf(b,sizeof b,"CALLED %s",E->gChoice==0?"RED":E->gChoice==1?"BLACK":SUITN[(E->gChoice-2)&3]);
+      sc=LZ_IVORY;
+    }
+    else if(res && won) snprintf(b,sizeof b,"WIN %d",E->gPot);
+    else if(res){ snprintf(b,sizeof b,"STAKE LOST"); sc=0xFF7890; }
+    else snprintf(b,sizeof b,"COLLECT %d",E->gPot);
+    ex_line(LZF_DISP_S,b,GLX+GLW-24.0f,CAPY+10.0f,21,sc,0,1.0f,LZ_RIGHT); }
 
   /* the pot: counts up on a win, shatters on a loss */
   long long shown=E->gPot;
   if(ph==GP_FLIP) shown=E->gFrom;
   if(res && won) shown=E->gFrom+(long long)((E->gPot-E->gFrom)*clampf(t/0.8f,0,1));
-  uint32_t lc = (res&&won) ? mixc(0xFFB020,0xFFFFFF,pl*0.7f) : 0xFFB020;
-  if(!(res && !won)) seg_num(shown,FBW/2+116,124,9,17,34,lc,0x4A3406,1);
-  else seg_num(0,FBW/2+116,124,9,17,34,0x5A1008,0x3A0C06,1);
-  if(ph!=GP_OUT){
-    snprintf(b,sizeof b,"ROUND %d OF %d",E->gRound+(ph==GP_PICK||ph==GP_DEAL?1:0),GAMBLE_ROUNDS);
-    text(b,BLKX+PLW/2,134,2,0xE8D8A8,1,1);
-  }
+  if(lost) ex_readout_c(0,FBW/2,POTY+9,30,0x6A1420);
+  else ex_readout_c(shown,FBW/2,POTY+9,30,(res&&won)?mixc(0xFFB020,0xFFFFFF,pl*0.7f):0xFFB020);
 
-  /* what each call would pay right now */
-  if(ph==GP_PICK||ph==GP_DEAL){
-    snprintf(b,sizeof b,"WINS %d",E->gPot*2);
-    text(b,REDX+PLW/2,PLY+146,2,0xFFFFFF,1,1);
-    text(b,BLKX+PLW/2,PLY+146,2,0xFFFFFF,1,1);
-    snprintf(b,sizeof b,"WINS %d",E->gPot*4);
-    text(b,LBRX,CHIPY+32,2,0xFFFFFF,1,1);
-  }
-  /* the call that was made */
-  if(ph==GP_FLIP||res){
-    uint32_t hc = res ? (won?0x7CFF6A:0xFF4A4A) : 0xFFFFFF;
-    int a=(int)(200+55*pl);
-    if(E->gChoice<2){
-      int x=E->gChoice==0?REDX:BLKX;
-      fb_rframe(x-6,PLY-6,PLW+12,PLH+12,20,4.0f,hc,a);
+  /* RED on the left, BLACK on the right, each with its two suits */
+  for(int side=0;side<2;side++){
+    static const char*const SIGN[2]={"RED","BLACK"};
+    static const int SP[2][2]={{0,1},{3,2}};
+    int sx=side?SIGNR:SIGNL, chosen=called && E->gChoice==side;
+    uint32_t tube=side?TUBE_BLK:TUBE_RED;
+    float pw;
+    if(ph==GP_OUT) pw=0.22f;
+    else if(called) pw = chosen ? (lost?0.35f:1.0f) : 0.22f;
+    else if(ph==GP_PICK) pw=0.62f+0.38f*pl;
+    else pw=0.6f;
+    if(chosen && !lost)
+      ex_glow(sx,SIGNY+30,140,(int)(((tube>>16)&255)*0.30f),(int)(((tube>>8)&255)*0.30f),(int)((tube&255)*0.30f));
+    lz_neon(LZF_NEON_L,SIGN[side],(float)sx,(float)SIGNY,64.0f,tube,pw,1.0f);
+    for(int k=0;k<2;k++) ex_npip(0,SP[side][k],sx+(k?34:-34),PIPY,tube,pw);
+    if(chosen && res){
+      if(won) ex_line(LZF_DISP_S,"RIGHT!",(float)sx,334,24,LZ_GOLD,1,1.0f,LZ_CENTER);
+      else ex_line(LZF_DISP_S,"NOT THIS TIME",(float)sx,334,22,0xFF7890,1,1.0f,LZ_CENTER);
+    } else if(!called && ph!=GP_OUT){
+      snprintf(b,sizeof b,"WINS %lld",stake*2);
+      ex_line(LZF_UI_M,b,(float)sx,334,23,LZ_GOLD,1,0.35f+0.65f*pw,LZ_CENTER);
     }
   }
+  if(!called && ph!=GP_OUT){                         /* what the suit call wins */
+    snprintf(b,sizeof b,"WINS %lld",stake*4);
+    ex_line(LZF_UI_M,b,LBRX,CHIPY+38,20,LZ_IVORY,2,1.0f,LZ_CENTER);
+  }
 
-  /* the card, with a halo behind it on a win */
+  /* the card: a magenta glow while it waits, a halo on a win */
   int cx=FBW/2;
+  if(ph==GP_PICK){
+    float g=0.22f+0.12f*pl;
+    ex_glow(cx,CARDY+CDH/2,170,(int)(255*g),(int)(40*g),(int)(200*g));
+  }
   if(res && won){
     float f=clampf(1.0f-t/1.2f,0.25f,1.0f);
     ex_glow(cx,CARDY+CDH/2,190,(int)(255*f),(int)(190*f),(int)(60*f));
@@ -1428,7 +1586,7 @@ static void gamble_draw(void){
   switch(ph){
   case GP_DEAL: {
     float u=clampf(t/0.35f,0,1), e=1.0f-(1.0f-u)*(1.0f-u)*(1.0f-u);
-    ex_card(cx,CARDY-(int)(260*(1.0f-e)),1.0f,-1,(int)(255*u),0.0f);
+    ex_card(cx,CARDY-(int)(240*(1.0f-e)),1.0f,-1,(int)(255*u),0.0f);
     break; }
   case GP_PICK:
     ex_card(cx,CARDY+(int)(sinf(G.t*2.2f)*2.0f),1.0f,-1,255,0.0f);
@@ -1442,11 +1600,11 @@ static void gamble_draw(void){
     ex_card(cx,CARDY,1.0f,E->gCard,255,0.0f);
     break;
   }
-  if(res && !won){                            /* the stake, in pieces */
+  if(lost){                                           /* the stake, in pieces */
     float tt=t;
     for(int k=0;k<18;k++){
       uint32_t sd=0x5A4Du+k*131u+(uint32_t)E->gRound*7u;
-      float ox=FBW/2-116+ex_hf(sd,1)*232, oy=124+ex_hf(sd,2)*34;
+      float ox=FBW/2-90+ex_hf(sd,1)*180, oy=POTY+10+ex_hf(sd,2)*28;
       float vx=(ex_hf(sd,3)-0.5f)*420.0f, vy=-60.0f-ex_hf(sd,4)*260.0f;
       float x=ox+vx*tt, y=oy+vy*tt+520.0f*tt*tt;
       float sz=8.0f+ex_hf(sd,5)*14.0f, rot=ex_hf(sd,6)*TAU+tt*(ex_hf(sd,7)-0.5f)*14.0f;
@@ -1457,36 +1615,42 @@ static void gamble_draw(void){
     }
   }
 
-  /* the suit chips */
+  /* the suit chips: the chosen one lit */
   for(int i=0;i<4;i++){
-    int x=CHIPX0+i*(CHIPW+8), y=CHIPY;
-    int sel=(i==E->gSuit), called=(E->gChoice==2+i && (ph==GP_FLIP||res));
-    if(!sel && !called) continue;             /* the chips are in the table */
-    uint32_t fc = called ? (res?(won?0x7CFF6A:0xFF4A4A):0xFFFFFF) : mixc(0xFFB020,0xFFFFFF,pl*0.6f);
-    fb_rframe(x-2,y-2,CHIPW+4,CHIPH+4,13,3.5f,fc,255);
+    int x=CHIPX0+i*(CHIPW+CHIPG), y=CHIPY;
+    int sel=(i==E->gSuit), callc=(E->gChoice==2+i && called);
+    if(!sel && !callc) continue;              /* the chips are in the table */
+    uint32_t tube=i<2?TUBE_RED:TUBE_BLK;
+    uint32_t fc = callc ? (res?(won?LZ_GREEN:0xFF4A5A):LZ_IVORY) : mixc(lz_hot(LZ_MAGENTA,0.3f),0xFFFFFF,pl*0.5f);
+    fb_rframe(x-3,y-3,CHIPW+6,CHIPH+6,16,2.5f,fc,255);
+    ex_npip(1,i,x+CHIPW/2,y+CHIPH/2,tube,(callc||ph==GP_PICK)?1.0f:0.7f);
     if(sel && ph==GP_PICK){
-      int ax=x+CHIPW/2, ay=y-7-(int)(pl*3);
-      ex_tri((float)ax-8,(float)ay-8,(float)ax+8,(float)ay-8,(float)ax,(float)ay,0xFFD24A,255);
+      int ax=x+CHIPW/2, ay=y-8-(int)(pl*3);
+      ex_tri((float)ax-8,(float)ay-8,(float)ax+8,(float)ay-8,(float)ax,(float)ay,LZ_GOLD,255);
     }
   }
 
   /* the last cards dealt */
   for(int i=0;i<EX_NHIST;i++){
     int x=HISTX0+i*(MCW+8), y=HISTY, h=E->gHist[i];
-    if(i==0 && (ph==GP_FLIP||ph==GP_DEAL)) h=E->gHist[1];   /* not until it lands */
-    if(i==0 && (ph==GP_FLIP||ph==GP_DEAL)) continue;
-    if(!h){ fb_rframe(x,y,MCW,MCH,6,1.2f,0x5AA070,140); continue; }
+    if(i==0 && (ph==GP_FLIP||ph==GP_DEAL)) continue;       /* not until it lands */
+    if(!h){ fb_rframe(x,y,MCW,MCH,6,1.2f,LZ_DIM,90); continue; }
     int card=h-1, suit=(card>>4)&3, rank=card&15;
     blit(&cardMini[suit],x,y,0,FBH,255,0,0.0f);
-    text(RANKS[rank>12?12:rank],x+5,y+5,2,suit<2?0xC8101E:0x101018,0,0);
-    if(i==0) fb_rframe(x-2,y-2,MCW+4,MCH+4,8,2.0f,0xFFD24A,255);
+    text(RANKS[rank>12?12:rank],x+5,y+5,2,suit<2?0xC8101E:0x1A1622,0,0);
+    if(i==0) fb_rframe(x-2,y-2,MCW+4,MCH+4,8,2.0f,LZ_GOLD,255);
   }
 
-  /* COLLECT: the button is in the table; it glows while it can be pressed */
-  { int x=COLX, y=HISTY, w=COLW, h=MCH;
-    if(ph==GP_PICK) fb_rframe(x-4,y-4,w+8,h+8,17,2.5f,mixc(0xFFD24A,0xFFFFFF,pl*0.6f),(int)(150+100*pl));
-    /* the same figure as the LED: the result must not show before the card */
-    snprintf(b,sizeof b,"%lld",(res && !won) ? 0LL : shown);
-    text(b,x+w/2,y+40,2,0x3A2004,1,0);
+  /* the result, in gold, where it happened */
+  if(res && won){
+    float a=clampf(t/0.2f,0,1);
+    if(E->gChoice<2) ex_banner("DOUBLED!",E->gChoice==0?SIGNL:SIGNR,SIGNY,220.0f,a);
+    else ex_banner("SUIT X4!",cx,CARDY+CDH/2,300.0f,a);
   }
+  if(ph==GP_OUT)
+    ex_banner(E->gEnd==GE_ROUNDS?"FIVE IN A ROW!":(E->gEnd==GE_LIMIT?"TABLE LIMIT":"COLLECTED"),
+              cx,CARDY+CDH/2,440.0f,clampf(t/0.2f,0,1));
+
+  /* how to play, while it can be played */
+  if(pick) ex_controls(ph==GP_PICK?1.0f:0.6f);
 }
