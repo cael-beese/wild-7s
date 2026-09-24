@@ -862,26 +862,53 @@ static void lz_caption_mask(const char *s, float capH, uint8_t *m, int w, int h,
   }
 }
 
-/* dst = src grown by r px (a round max filter), for outlines. */
-static void lz_dilate(const uint8_t *src, uint8_t *dst, int w, int h, float r){
-  int R = (int)ceilf(r);
-  for(int y = 0; y < h; y++) for(int x = 0; x < w; x++){
-    int best = 0;
-    for(int j = -R; j <= R && best < 255; j++){
-      int yy = y + j;
-      if((unsigned)yy >= (unsigned)h) continue;
-      for(int i = -R; i <= R; i++){
-        int xx = x + i;
-        if((unsigned)xx >= (unsigned)w) continue;
-        float d = sqrtf((float)(i * i + j * j)) - r;
-        if(d >= 1.0f) continue;
-        int v = src[(size_t)yy * w + xx];
-        if(d > 0) v = (int)(v * (1.0f - d));
-        if(v > best) best = v;
-      }
+/* One line of the squared Euclidean distance transform (Felzenszwalb and
+ * Huttenlocher): d[q] = min over p of (q - p)^2 + f[p]. v, z are scratch. */
+static void lz_edt1(const float *f, float *d, int *v, float *z, int n){
+  int k = 0;
+  v[0] = 0; z[0] = -1e30f; z[1] = 1e30f;
+  for(int q = 1; q < n; q++){
+    float s = ((f[q] + (float)q * q) - (f[v[k]] + (float)v[k] * v[k])) / (2.0f * (q - v[k]));
+    while(s <= z[k]){
+      k--;
+      s = ((f[q] + (float)q * q) - (f[v[k]] + (float)v[k] * v[k])) / (2.0f * (q - v[k]));
     }
-    dst[(size_t)y * w + x] = (uint8_t)best;
+    k++;
+    v[k] = q; z[k] = s; z[k + 1] = 1e30f;
   }
+  k = 0;
+  for(int q = 0; q < n; q++){
+    while(z[k + 1] < q) k++;
+    d[q] = (float)(q - v[k]) * (q - v[k]) + f[v[k]];
+  }
+}
+
+/* dst = src grown by r px, for outlines: coverage falls off one pixel past
+ * r from the nearest inside pixel (src >= 128), found with an exact distance
+ * transform in two linear passes - a brute-force disc filter cost ~600
+ * samples a pixel at title sizes and dominated start-up. */
+static void lz_dilate(const uint8_t *src, uint8_t *dst, int w, int h, float r){
+  int n = w > h ? w : h;
+  float *g = (float *)malloc(sizeof(float) * (size_t)w * h);
+  float *f = (float *)malloc(sizeof(float) * n), *d = (float *)malloc(sizeof(float) * n);
+  float *z = (float *)malloc(sizeof(float) * (n + 1));
+  int *v = (int *)malloc(sizeof(int) * n);
+  if(!g || !f || !d || !z || !v){ free(g); free(f); free(d); free(z); free(v); memcpy(dst, src, (size_t)w * h); return; }
+  for(int y = 0; y < h; y++){                       /* rows */
+    for(int x = 0; x < w; x++) f[x] = src[(size_t)y * w + x] >= 128 ? 0.0f : 1e20f;
+    lz_edt1(f, d, v, z, w);
+    memcpy(g + (size_t)y * w, d, sizeof(float) * w);
+  }
+  for(int x = 0; x < w; x++){                       /* columns */
+    for(int y = 0; y < h; y++) f[y] = g[(size_t)y * w + x];
+    lz_edt1(f, d, v, z, h);
+    for(int y = 0; y < h; y++){
+      float c = clampf(r + 1.0f - sqrtf(d[y]), 0, 1);
+      int o = (int)(c * 255.0f + 0.5f), s = src[(size_t)y * w + x];
+      dst[(size_t)y * w + x] = (uint8_t)(s > o ? s : o);
+    }
+  }
+  free(g); free(f); free(d); free(z); free(v);
 }
 
 /* ── readouts (draw code) ─────────────────────────────────────────── */
